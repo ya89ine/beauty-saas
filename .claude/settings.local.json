@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx shadcn@latest *)",
+      "Bash(xargs grep *)",
+      "Bash(npm install *)",
+      "Bash(node -e \"const s = require\\('./node_modules/shadcn/dist/schema/index.js'\\); console.log\\(JSON.stringify\\(Object.keys\\(s\\), null, 2\\)\\)\")",
+      "Bash(node_modules/.bin/shadcn init *)",
+      "Bash(node_modules/.bin/shadcn add *)",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(npx *)",
+      "Bash(cp src/middleware.ts src/proxy.ts)",
+      "Bash(sed -i 's/export async function middleware/export async function proxy/' src/proxy.ts)",
+      "Bash(rm src/middleware.ts)",
+      "Bash(code C:\\\\Users\\\\DELL\\\\beauty-saas *)",
+      "PowerShell(code \"C:\\\\Users\\\\DELL\\\\beauty-saas\")",
+      "Bash(curl *)",
+      "PowerShell(taskkill *)"
+    ]
+  }
+}
