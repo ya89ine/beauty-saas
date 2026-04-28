@@ -57,10 +57,10 @@ export function SettingsClient({ clinic }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <h1 className="text-3xl font-semibold tracking-tight">Settings</h1>
+        <p className="mt-1.5 text-sm text-muted-foreground">
           Clinic profile, contact info, and booking preferences
         </p>
       </div>
@@ -73,7 +73,7 @@ export function SettingsClient({ clinic }: Props) {
         )}
 
         {/* Clinic Info */}
-        <div className="rounded-xl border bg-card p-6 shadow-sm">
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-card">
           <h2 className="mb-4 text-base font-medium">Clinic info</h2>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
@@ -123,7 +123,7 @@ export function SettingsClient({ clinic }: Props) {
         </div>
 
         {/* Preferences */}
-        <div className="rounded-xl border bg-card p-6 shadow-sm">
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-card">
           <h2 className="mb-4 text-base font-medium">Preferences</h2>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-1.5">
@@ -132,7 +132,7 @@ export function SettingsClient({ clinic }: Props) {
                 id="timezone"
                 name="timezone"
                 defaultValue={clinic.timezone}
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm transition-colors outline-none focus-visible:border-ring cursor-pointer"
+                className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm shadow-xs transition-[color,border-color,box-shadow] outline-none hover:border-foreground/20 focus-visible:border-ring focus-visible:ring-4 focus-visible:ring-ring/15 cursor-pointer"
               >
                 {TIMEZONES.map((tz) => (
                   <option key={tz} value={tz}>
@@ -156,7 +156,7 @@ export function SettingsClient({ clinic }: Props) {
         </div>
 
         {/* Booking URL */}
-        <div className="rounded-xl border bg-card p-6 shadow-sm">
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-card">
           <h2 className="mb-1 text-base font-medium">Booking link</h2>
           <p className="mb-3 text-sm text-muted-foreground">
             Share this link with your clients so they can browse your services.

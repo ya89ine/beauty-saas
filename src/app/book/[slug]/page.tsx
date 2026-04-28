@@ -74,7 +74,7 @@ export default async function PublicBookingPage(props: PageProps<'/book/[slug]'>
         <h2 className="mb-6 text-lg font-semibold">Choose a service</h2>
 
         {services?.length === 0 ? (
-          <div className="rounded-xl border bg-card py-16 text-center text-sm text-muted-foreground shadow-sm">
+          <div className="rounded-2xl border border-border bg-card py-16 text-center text-sm text-muted-foreground shadow-card">
             No services available at the moment.
           </div>
         ) : (

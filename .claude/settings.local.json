@@ -16,7 +16,9 @@
       "Bash(code C:\\\\Users\\\\DELL\\\\beauty-saas *)",
       "PowerShell(code \"C:\\\\Users\\\\DELL\\\\beauty-saas\")",
       "Bash(curl *)",
-      "PowerShell(taskkill *)"
+      "PowerShell(taskkill *)",
+      "Bash(mkdir -p 'src/app/admin/\\(gated\\)')",
+      "Bash(mv src/app/admin/actions.ts src/app/admin/admin-client.tsx src/app/admin/layout.tsx src/app/admin/page.tsx src/app/admin/seed-actions.ts 'src/app/admin/\\(gated\\)/')"
     ]
   }
 }

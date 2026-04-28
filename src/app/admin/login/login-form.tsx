@@ -1,13 +1,13 @@
 'use client'
 
 import { useActionState } from 'react'
-import { signIn } from '@/lib/actions/auth'
+import { signInAdmin } from '@/lib/actions/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-export function LoginForm() {
-  const [state, action, pending] = useActionState(signIn, undefined)
+export function AdminLoginForm() {
+  const [state, action, pending] = useActionState(signInAdmin, undefined)
 
   return (
     <form action={action} className="flex flex-col gap-5">
@@ -18,12 +18,12 @@ export function LoginForm() {
       )}
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="email" className="text-xs font-medium">Email</Label>
+        <Label htmlFor="email" className="text-xs font-medium">Admin email</Label>
         <Input
           id="email"
           name="email"
           type="email"
-          placeholder="you@example.com"
+          placeholder="admin@example.com"
           autoComplete="email"
           required
           className="h-10 px-3 text-sm"
@@ -44,7 +44,7 @@ export function LoginForm() {
       </div>
 
       <Button type="submit" className="mt-1 h-10 w-full text-sm" disabled={pending}>
-        {pending ? 'Signing in…' : 'Sign in'}
+        {pending ? 'Signing in…' : 'Sign in as admin'}
       </Button>
     </form>
   )

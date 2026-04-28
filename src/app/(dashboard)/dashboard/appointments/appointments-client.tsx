@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useTransition, useMemo, useEffect } from 'react'
-import { useRouter } from 'next/navigation'
+import { useState, useTransition, useMemo, useEffect, useRef } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   format,
   startOfWeek,
@@ -47,7 +47,8 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Service, Staff } from '@/types/database'
-import { createAppointment, updateAppointment, deleteAppointment } from './actions'
+import { createAppointment, updateAppointment, deleteAppointment, searchClients, type ClientSummary } from './actions'
+import { APPOINTMENT_DURATIONS } from './constants'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -64,9 +65,22 @@ import {
 
 type AptStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed' | 'no_show'
 
+// Re-exported alias used by the page server component to type its
+// search-param parser. Keeping the union in one place avoids drift between the
+// chip UI, the URL contract, and the DB query.
+export type AptStatusKey = AptStatus
+
+export type ActiveFilter = {
+  statuses: AptStatus[]
+  fromStr: string  // YYYY-MM-DD
+  toStr: string    // YYYY-MM-DD
+  allStatusesSelected: boolean
+}
+
 type AppointmentRow = {
   id: string
   clinic_id: string
+  client_id: string | null
   client_name: string
   client_email: string | null
   client_phone: string | null
@@ -391,15 +405,22 @@ function SchedulerView({
       staff_id:  newStaffId,
     }))
 
+    // Preserve the appointment's existing duration when rescheduling — the
+    // server now expects an explicit `duration_minutes` and will recompute
+    // ends_at from it.
+    const aptDuration = differenceInMinutes(parseISO(apt.ends_at), parseISO(apt.starts_at))
+
     const fd = new FormData()
-    fd.set('client_name',  apt.client_name)
-    fd.set('client_email', apt.client_email ?? '')
-    fd.set('client_phone', apt.client_phone ?? '')
-    fd.set('service_id',   apt.service_id)
-    fd.set('staff_id',     newStaffId ?? '')
-    fd.set('starts_at',    toDatetimeLocal(clampedStart))
-    fd.set('status',       apt.status)
-    fd.set('notes',        apt.notes ?? '')
+    fd.set('client_id',        apt.client_id ?? '')
+    fd.set('client_name',      apt.client_name)
+    fd.set('client_email',     apt.client_email ?? '')
+    fd.set('client_phone',     apt.client_phone ?? '')
+    fd.set('service_id',       apt.service_id)
+    fd.set('staff_id',         newStaffId ?? '')
+    fd.set('starts_at',        toDatetimeLocal(clampedStart))
+    fd.set('duration_minutes', String(aptDuration))
+    fd.set('status',           apt.status)
+    fd.set('notes',            apt.notes ?? '')
 
     startTransition(async () => {
       const result = await updateAppointment(apt.id, fd)
@@ -629,7 +650,7 @@ function TodaySummary({
   }, [appointments])
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4 shadow-sm">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-4 shadow-card">
       <div className="flex flex-wrap gap-5">
         <div className="flex items-center gap-2 text-sm">
           <Calendar className="h-4 w-4 text-primary shrink-0" />
@@ -728,6 +749,142 @@ function AptDetail({
 
 // ─── Appointment form dialog ──────────────────────────────────────────────────
 
+// ─── Smart client selector (search + create) ─────────────────────────────────
+
+function ClientSelector({
+  selectedId,
+  name,
+  onChange,
+  onSelect,
+  onClear,
+  onCreateNew,
+  inputRef,
+}: {
+  selectedId: string | null
+  name: string
+  onChange: (name: string) => void
+  onSelect: (client: ClientSummary) => void
+  onClear: () => void
+  onCreateNew: () => void
+  inputRef?: React.RefObject<HTMLInputElement | null>
+}) {
+  const [results, setResults] = useState<ClientSummary[]>([])
+  const [open, setOpen] = useState(false)
+  const [searching, setSearching] = useState(false)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const queryRef = useRef(name)
+  queryRef.current = name
+
+  // Debounced server-side search.
+  useEffect(() => {
+    if (selectedId) return
+    const q = name.trim()
+    if (q.length < 1) { setResults([]); setSearching(false); return }
+    setSearching(true)
+    const t = setTimeout(async () => {
+      const r = await searchClients(q)
+      if (queryRef.current.trim() !== q) return
+      setResults(r.clients ?? [])
+      setSearching(false)
+    }, 200)
+    return () => { clearTimeout(t) }
+  }, [name, selectedId])
+
+  // Close dropdown on outside click.
+  useEffect(() => {
+    if (!open) return
+    function onDown(e: MouseEvent) {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  const trimmed = name.trim()
+  const exactMatch = results.some((c) => c.name.toLowerCase() === trimmed.toLowerCase())
+  const showCreate = !selectedId && trimmed.length > 0 && !exactMatch
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="relative flex items-center">
+        <Input
+          ref={inputRef ?? undefined}
+          value={name}
+          onChange={(e) => {
+            if (selectedId) onClear()
+            onChange(e.target.value)
+            setOpen(true)
+          }}
+          onFocus={() => { if (!selectedId) setOpen(true) }}
+          placeholder="Search by name, email, or phone…"
+          required
+          className="pr-8"
+          autoComplete="off"
+        />
+        {selectedId && (
+          <button
+            type="button"
+            onClick={() => { onClear(); setOpen(true); inputRef?.current?.focus() }}
+            className="absolute right-2 inline-flex h-5 w-5 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Unlink client"
+            title="Unlink client"
+          >
+            ×
+          </button>
+        )}
+      </div>
+
+      <p className={`mt-1 text-[11px] ${selectedId ? 'text-emerald-700' : 'text-muted-foreground'}`}>
+        {selectedId
+          ? '✓ Linked to existing client'
+          : searching
+          ? 'Searching…'
+          : 'Pick an existing client or create a new one.'}
+      </p>
+
+      {open && !selectedId && (results.length > 0 || showCreate) && (
+        <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-lg ring-1 ring-foreground/10">
+          {results.length > 0 && (
+            <ul className="max-h-56 overflow-y-auto py-1" role="listbox">
+              {results.map((c) => (
+                <li key={c.id}>
+                  <button
+                    type="button"
+                    onClick={() => { onSelect(c); setOpen(false) }}
+                    className="flex w-full items-start gap-2 px-3 py-2 text-left text-sm hover:bg-muted transition-colors"
+                    role="option"
+                    aria-selected="false"
+                  >
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                      {c.name.charAt(0).toUpperCase()}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <p className="truncate font-medium leading-tight">{c.name}</p>
+                      <p className="truncate text-[11px] text-muted-foreground">
+                        {[c.email, c.phone].filter(Boolean).join(' · ') || '—'}
+                      </p>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {showCreate && (
+            <button
+              type="button"
+              onClick={() => { onCreateNew(); setOpen(false) }}
+              className="flex w-full items-center gap-2 border-t bg-muted/40 px-3 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Create new client &quot;{trimmed}&quot;
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AptFormDialog({
   open,
   onOpenChange,
@@ -750,12 +907,77 @@ function AptFormDialog({
   const [formError, setFormError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
 
-  useEffect(() => { if (open) setFormError(null) }, [open, editing?.id])
+  // Controlled client fields. The server uses `client_id` as the source of truth
+  // when present; otherwise it dedups by phone/email and creates a client.
+  const [clientId, setClientId] = useState<string | null>(editing?.client_id ?? null)
+  const [clientName, setClientName] = useState(editing?.client_name ?? '')
+  const [clientEmail, setClientEmail] = useState(editing?.client_email ?? '')
+  const [clientPhone, setClientPhone] = useState(editing?.client_phone ?? '')
+  const emailInputRef = useRef<HTMLInputElement | null>(null)
+  const nameInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Controlled time fields so we can render a live "10:00 → 11:00" preview.
+  const initialDuration = (() => {
+    if (editing) {
+      const m = differenceInMinutes(parseISO(editing.ends_at), parseISO(editing.starts_at))
+      // Snap to the nearest dropdown option so the select shows a sensible
+      // default; the server still accepts any value, so editing legacy
+      // appointments doesn't lose precision unless the user actually changes it.
+      return APPOINTMENT_DURATIONS.reduce(
+        (best, opt) => (Math.abs(opt - m) < Math.abs(best - m) ? opt : best),
+        60 as number,
+      )
+    }
+    return 60
+  })()
+  const [startsAt, setStartsAt] = useState<string>(
+    editing ? toDatetimeLocal(parseISO(editing.starts_at)) : defaultStartsAt,
+  )
+  const [duration, setDuration] = useState<number>(initialDuration)
+
+  useEffect(() => {
+    if (!open) return
+    setFormError(null)
+    setClientId(editing?.client_id ?? null)
+    setClientName(editing?.client_name ?? '')
+    setClientEmail(editing?.client_email ?? '')
+    setClientPhone(editing?.client_phone ?? '')
+    setStartsAt(editing ? toDatetimeLocal(parseISO(editing.starts_at)) : defaultStartsAt)
+    if (editing) {
+      const m = differenceInMinutes(parseISO(editing.ends_at), parseISO(editing.starts_at))
+      const snapped = APPOINTMENT_DURATIONS.reduce(
+        (best, opt) => (Math.abs(opt - m) < Math.abs(best - m) ? opt : best),
+        60 as number,
+      )
+      setDuration(snapped)
+    } else {
+      setDuration(60)
+    }
+  }, [open, editing?.id, editing?.client_id, editing?.client_name, editing?.client_email, editing?.client_phone, editing?.starts_at, editing?.ends_at, defaultStartsAt])
+
+  const linked = !!clientId
+
+  // Live time-range preview ("HH:mm → HH:mm"). parseISO handles the
+  // datetime-local string ("yyyy-MM-ddTHH:mm") as a local time.
+  const startDate = startsAt ? parseISO(startsAt) : null
+  const endDate = startDate && !isNaN(startDate.getTime()) ? addMinutes(startDate, duration) : null
+  const preview = startDate && endDate && !isNaN(startDate.getTime())
+    ? `${format(startDate, 'HH:mm')} → ${format(endDate, 'HH:mm')}`
+    : null
 
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setFormError(null)
     const fd = new FormData(e.currentTarget)
+    // Email/phone inputs are disabled when a client is linked, so they won't
+    // be in the FormData. Set them explicitly so the server has full context
+    // (even though it'll override with the client record's values).
+    fd.set('client_id', clientId ?? '')
+    fd.set('client_name', clientName.trim())
+    fd.set('client_email', clientEmail.trim())
+    fd.set('client_phone', clientPhone.trim())
+    fd.set('starts_at', startsAt)
+    fd.set('duration_minutes', String(duration))
     startTransition(async () => {
       const result = editing
         ? await updateAppointment(editing.id, fd)
@@ -784,18 +1006,55 @@ function AptFormDialog({
           )}
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="client_name">Client name *</Label>
-            <Input id="client_name" name="client_name" required defaultValue={editing?.client_name} placeholder="Sara Benali" />
+            <Label>Client *</Label>
+            <ClientSelector
+              selectedId={clientId}
+              name={clientName}
+              inputRef={nameInputRef}
+              onChange={setClientName}
+              onSelect={(c) => {
+                setClientId(c.id)
+                setClientName(c.name)
+                setClientEmail(c.email ?? '')
+                setClientPhone(c.phone ?? '')
+              }}
+              onClear={() => {
+                setClientId(null)
+              }}
+              onCreateNew={() => {
+                // Stays unlinked; server will create the client on submit.
+                // Move focus to email so contact info can be filled in fast.
+                setClientId(null)
+                emailInputRef.current?.focus()
+              }}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="client_email">Email</Label>
-              <Input id="client_email" name="client_email" type="email" defaultValue={editing?.client_email ?? ''} placeholder="sara@example.com" />
+              <Input
+                ref={emailInputRef}
+                id="client_email"
+                type="email"
+                value={clientEmail}
+                onChange={(e) => setClientEmail(e.target.value)}
+                disabled={linked}
+                placeholder="sara@example.com"
+                title={linked ? 'Unlink the client to edit contact info' : undefined}
+              />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="client_phone">Phone</Label>
-              <Input id="client_phone" name="client_phone" type="tel" defaultValue={editing?.client_phone ?? ''} placeholder="+212 6 00 00 00 00" />
+              <Input
+                id="client_phone"
+                type="tel"
+                value={clientPhone}
+                onChange={(e) => setClientPhone(e.target.value)}
+                disabled={linked}
+                placeholder="+212 6 00 00 00 00"
+                title={linked ? 'Unlink the client to edit contact info' : undefined}
+              />
             </div>
           </div>
 
@@ -824,21 +1083,58 @@ function AptFormDialog({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="starts_at">Date & time *</Label>
-              <Input id="starts_at" name="starts_at" type="datetime-local" required
-                defaultValue={editing ? toDatetimeLocal(parseISO(editing.starts_at)) : defaultStartsAt} />
+              <Label htmlFor="starts_at">Start time *</Label>
+              <Input
+                id="starts_at"
+                type="datetime-local"
+                required
+                value={startsAt}
+                onChange={(e) => setStartsAt(e.target.value)}
+              />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="status">Status</Label>
-              <select id="status" name="status" defaultValue={editing?.status ?? 'pending'}
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer">
-                <option value="pending">Pending</option>
-                <option value="confirmed">Confirmed</option>
-                <option value="cancelled">Cancelled</option>
-                <option value="completed">Completed</option>
-                <option value="no_show">No Show</option>
+              <Label htmlFor="duration_minutes">Duration *</Label>
+              <select
+                id="duration_minutes"
+                value={duration}
+                onChange={(e) => setDuration(Number(e.target.value))}
+                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer"
+              >
+                {/* Editing a legacy appointment with a non-standard duration?
+                    Surface it as an extra option so the dropdown reflects the
+                    current saved value. */}
+                {!APPOINTMENT_DURATIONS.includes(duration as typeof APPOINTMENT_DURATIONS[number]) && (
+                  <option value={duration}>{duration} min (current)</option>
+                )}
+                {APPOINTMENT_DURATIONS.map((m) => (
+                  <option key={m} value={m}>
+                    {m < 60 ? `${m} min` : m === 60 ? '1 hour' : m % 60 === 0 ? `${m / 60} hours` : `${Math.floor(m / 60)}h ${m % 60}m`}
+                  </option>
+                ))}
               </select>
             </div>
+          </div>
+
+          {preview && (
+            <div className="flex items-center justify-between rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-sm">
+              <span className="flex items-center gap-2 font-mono font-semibold tabular-nums text-foreground">
+                <Clock className="h-3.5 w-3.5 text-primary" />
+                {preview}
+              </span>
+              <span className="text-xs text-muted-foreground">{duration} min</span>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="status">Status</Label>
+            <select id="status" name="status" defaultValue={editing?.status ?? 'pending'}
+              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer">
+              <option value="pending">Pending</option>
+              <option value="confirmed">Confirmed</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="completed">Completed</option>
+              <option value="no_show">No Show</option>
+            </select>
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -858,15 +1154,191 @@ function AptFormDialog({
   )
 }
 
+// ─── Filter bar (server-side via URL search params) ──────────────────────────
+
+const FILTER_STATUS_ORDER: AptStatus[] = ['pending', 'confirmed', 'completed', 'cancelled', 'no_show']
+const ALL_FILTER_STATUSES: AptStatus[] = ['pending', 'confirmed', 'cancelled', 'completed', 'no_show']
+
+function FilterBar({ filter }: { filter: ActiveFilter }) {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const [isPending, startTransition] = useTransition()
+
+  function update(updates: Record<string, string | null>) {
+    const usp = new URLSearchParams(searchParams.toString())
+    for (const [k, v] of Object.entries(updates)) {
+      if (v === null || v === '') usp.delete(k)
+      else usp.set(k, v)
+    }
+    const qs = usp.toString()
+    startTransition(() => {
+      router.push(qs ? `/dashboard/appointments?${qs}` : '/dashboard/appointments', { scroll: false })
+    })
+  }
+
+  function setQuickView(kind: 'today' | 'week' | 'month') {
+    const today = new Date()
+    let from: Date
+    let to: Date
+    if (kind === 'today') {
+      from = today
+      to = today
+    } else if (kind === 'week') {
+      from = startOfWeek(today, { weekStartsOn: 1 })
+      to = endOfWeek(today, { weekStartsOn: 1 })
+    } else {
+      from = startOfMonth(today)
+      to = endOfMonth(today)
+    }
+    update({ from: format(from, 'yyyy-MM-dd'), to: format(to, 'yyyy-MM-dd') })
+  }
+
+  function toggleStatus(s: AptStatus) {
+    let next: AptStatus[]
+    if (filter.allStatusesSelected) {
+      // First click peels this status out of the implicit "all".
+      next = ALL_FILTER_STATUSES.filter((x) => x !== s)
+    } else if (filter.statuses.includes(s)) {
+      next = filter.statuses.filter((x) => x !== s)
+    } else {
+      next = [...filter.statuses, s]
+    }
+    // Empty selection → treat as "show all" (UX: avoid an unintentional
+    // empty result from clicking off the last chip).
+    if (next.length === 0 || next.length === ALL_FILTER_STATUSES.length) {
+      update({ status: null })
+    } else {
+      update({ status: next.join(',') })
+    }
+  }
+
+  function clearAll() {
+    update({ status: null, from: null, to: null })
+  }
+
+  // Detect which quick-view (if any) the current range matches, for the
+  // "active" pill style.
+  const today = new Date()
+  const todayStr = format(today, 'yyyy-MM-dd')
+  const weekStartStr = format(startOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd')
+  const weekEndStr = format(endOfWeek(today, { weekStartsOn: 1 }), 'yyyy-MM-dd')
+  const monthStartStr = format(startOfMonth(today), 'yyyy-MM-dd')
+  const monthEndStr = format(endOfMonth(today), 'yyyy-MM-dd')
+
+  const activeQuick: 'today' | 'week' | 'month' | null =
+    filter.fromStr === todayStr && filter.toStr === todayStr
+      ? 'today'
+      : filter.fromStr === weekStartStr && filter.toStr === weekEndStr
+      ? 'week'
+      : filter.fromStr === monthStartStr && filter.toStr === monthEndStr
+      ? 'month'
+      : null
+
+  const isDefault = activeQuick === 'month' && filter.allStatusesSelected
+
+  return (
+    <div className="rounded-2xl border border-border bg-card p-3 shadow-card">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        {/* Quick views */}
+        <div className="inline-flex items-center gap-0.5 rounded-lg border border-border bg-background p-0.5">
+          {(['today', 'week', 'month'] as const).map((k) => {
+            const active = activeQuick === k
+            return (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setQuickView(k)}
+                disabled={isPending}
+                aria-pressed={active}
+                className={`h-7 rounded-md px-2.5 text-xs font-medium transition-colors disabled:opacity-60 ${
+                  active ? 'bg-primary text-primary-foreground shadow-sm' : 'text-foreground hover:bg-muted'
+                }`}
+              >
+                {k === 'today' ? 'Today' : k === 'week' ? 'This week' : 'This month'}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
+
+        {/* Date range */}
+        <div className="flex items-center gap-1.5 text-xs">
+          <label className="flex items-center gap-1.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">From</span>
+            <input
+              type="date"
+              value={filter.fromStr}
+              max={filter.toStr || undefined}
+              disabled={isPending}
+              onChange={(e) => update({ from: e.target.value || null })}
+              className="h-7 rounded-md border border-input bg-background px-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
+            />
+          </label>
+          <label className="flex items-center gap-1.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">To</span>
+            <input
+              type="date"
+              value={filter.toStr}
+              min={filter.fromStr || undefined}
+              disabled={isPending}
+              onChange={(e) => update({ to: e.target.value || null })}
+              className="h-7 rounded-md border border-input bg-background px-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring/40 disabled:opacity-60"
+            />
+          </label>
+        </div>
+
+        <div className="hidden h-6 w-px bg-border sm:block" aria-hidden="true" />
+
+        {/* Status chips */}
+        <div className="flex flex-wrap items-center gap-1">
+          {FILTER_STATUS_ORDER.map((s) => {
+            const cfg = STATUS_CFG[s]
+            const active = filter.allStatusesSelected || filter.statuses.includes(s)
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggleStatus(s)}
+                disabled={isPending}
+                aria-pressed={active}
+                className={`h-7 rounded-full px-2.5 text-[11px] font-semibold transition-all disabled:opacity-60 ${
+                  active
+                    ? `${cfg.bg} ${cfg.text} ring-1 ring-inset ${cfg.border}`
+                    : 'border border-input bg-background text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                {cfg.label}
+              </button>
+            )
+          })}
+        </div>
+
+        {!isDefault && (
+          <button
+            type="button"
+            onClick={clearAll}
+            disabled={isPending}
+            className="ml-auto inline-flex h-7 items-center rounded-md px-2.5 text-[11px] font-semibold text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-60"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 interface Props {
   appointments: AppointmentRow[]
   services: Service[]
   staffList: Staff[]
+  filter: ActiveFilter
 }
 
-export function AppointmentsClient({ appointments, services, staffList }: Props) {
+export function AppointmentsClient({ appointments, services, staffList, filter }: Props) {
   const router = useRouter()
   const [view, setView] = useState<ViewMode>('schedule')
   const [currentDate, setCurrentDate] = useState(() => new Date())
@@ -928,9 +1400,10 @@ export function AppointmentsClient({ appointments, services, staffList }: Props)
 
   return (
     <div className="flex flex-col gap-4">
+      <FilterBar filter={filter} />
       <TodaySummary appointments={appointments} onNew={() => openCreate()} />
 
-      <div className="rounded-xl border bg-card shadow-sm overflow-hidden">
+      <div className="rounded-2xl border border-border bg-card shadow-card overflow-hidden">
         {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
           {/* View switcher */}

@@ -224,9 +224,9 @@ export function StaffPerformanceClient({ staffList, appointments }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Staff Performance</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Staff Performance</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Completed appointments, revenue, and clients per staff member
         </p>

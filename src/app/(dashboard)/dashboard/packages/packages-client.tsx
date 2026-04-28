@@ -646,11 +646,11 @@ export function PackagesClient({
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-3xl font-semibold tracking-tight">
             Treatment Packages
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -713,7 +713,7 @@ export function PackagesClient({
 
       {/* Packages table */}
       {filtered.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 rounded-xl border bg-card py-20 text-center shadow-sm">
+        <div className="flex flex-col items-center gap-3 rounded-2xl border border-border bg-card py-20 text-center shadow-card">
           <Package className="h-10 w-10 text-muted-foreground/40" />
           <p className="font-medium">No packages yet</p>
           <p className="text-sm text-muted-foreground">
@@ -726,7 +726,7 @@ export function PackagesClient({
           </Button>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+        <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-card">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b bg-muted/40 hover:bg-muted/40">

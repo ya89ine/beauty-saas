@@ -28,7 +28,7 @@ export default async function DashboardPage() {
   if (!clinic) {
     return (
       <div className="flex flex-col items-start gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Welcome</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Welcome</h1>
         <p className="text-sm text-muted-foreground">
           You don&apos;t have a clinic set up yet.
         </p>
@@ -122,7 +122,7 @@ export default async function DashboardPage() {
   return (
     <div className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <h1 className="text-3xl font-semibold tracking-tight">
           Good morning 👋
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">

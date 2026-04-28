@@ -1,13 +1,70 @@
 import type { Metadata } from 'next'
 import { redirect } from 'next/navigation'
-import { parseISO } from 'date-fns'
+import { format, parseISO, startOfWeek, endOfWeek } from 'date-fns'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { AdminClient, type ClinicRow } from './admin-client'
+import { AdminClient, type ClinicRow, type DateRangeInfo } from './admin-client'
 
 export const metadata: Metadata = { title: 'Admin' }
 
-export default async function AdminPage() {
+type RangeKey = 'today' | 'yesterday' | 'week' | 'custom'
+
+function resolveRange(rangeRaw: string | undefined, dateRaw: string | undefined): DateRangeInfo & { start: Date; end: Date } {
+  const now = new Date()
+  const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  const endOfDay   = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999)
+
+  // A valid YYYY-MM-DD param implicitly switches to "custom" range.
+  let key: RangeKey
+  if (dateRaw && /^\d{4}-\d{2}-\d{2}$/.test(dateRaw)) {
+    key = 'custom'
+  } else if (rangeRaw === 'yesterday' || rangeRaw === 'week' || rangeRaw === 'custom') {
+    key = rangeRaw
+  } else {
+    key = 'today'
+  }
+
+  let start: Date
+  let end: Date
+  let label: string
+  let date: string | null = null
+
+  if (key === 'today') {
+    start = startOfDay(now)
+    end = endOfDay(now)
+    label = 'Today'
+    date = format(start, 'yyyy-MM-dd')
+  } else if (key === 'yesterday') {
+    const y = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1)
+    start = startOfDay(y)
+    end = endOfDay(y)
+    label = 'Yesterday'
+    date = format(start, 'yyyy-MM-dd')
+  } else if (key === 'week') {
+    start = startOfWeek(now, { weekStartsOn: 1 })
+    end = endOfWeek(now, { weekStartsOn: 1 })
+    label = 'This week'
+    date = null
+  } else {
+    // custom: validated above. Fallback to today if parseISO fails.
+    const parsed = dateRaw ? parseISO(dateRaw) : now
+    const safe = isNaN(parsed.getTime()) ? now : parsed
+    start = startOfDay(safe)
+    end = endOfDay(safe)
+    label = format(start, 'EEE dd MMM yyyy')
+    date = format(start, 'yyyy-MM-dd')
+  }
+
+  return { key, start, end, label, date, startIso: start.toISOString(), endIso: end.toISOString() }
+}
+
+export default async function AdminPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ range?: string; date?: string }>
+}) {
+  const sp = await searchParams
+  const range = resolveRange(sp.range, sp.date)
   // /admin gating is owned by src/proxy.ts (single source of truth).
   // Here we only fetch the user for display. Any non-admin would have
   // been redirected upstream by the proxy.
@@ -36,11 +93,11 @@ export default async function AdminPage() {
         clinics={[]}
         adminEmail={user.email}
         mrr={0}
-        appointmentsToday={0}
-        revenueToday={0}
-        appointmentsThisMonth={0}
-        revenueThisMonth={0}
-        newClinicsThisMonth={0}
+        range={{ key: range.key, startIso: range.startIso, endIso: range.endIso, label: range.label, date: range.date }}
+        appointmentsInRange={0}
+        revenueInRange={0}
+        newClinicsInRange={0}
+        newClientsInRange={0}
         isDev={isDev}
       />
     )
@@ -53,13 +110,9 @@ export default async function AdminPage() {
   // 5. Aggregate stats per clinic + global activity totals in one parallel batch
   const clinicIds = clinics.map((c) => c.id)
 
-  const now = new Date()
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-  const todayStartIso = todayStart.toISOString()
-  const todayEndIso = todayEnd.toISOString()
-  const monthStartIso = monthStart.toISOString()
+  // Range window selected by the date filter (server-side only — no client filtering).
+  const rangeStartIso = range.startIso
+  const rangeEndIso = range.endIso
 
   const [
     clientCounts,
@@ -69,10 +122,10 @@ export default async function AdminPage() {
     staffCounts,
     ghlCounts,
     lastActivity,
-    aptsTodayRes,
-    revenueTodayRes,
-    aptsThisMonthRes,
-    revenueThisMonthRes,
+    aptsInRangeRes,
+    revenueInRangeRes,
+    newClinicsInRangeRes,
+    newClientsInRangeRes,
   ] = await Promise.all([
     // Clients per clinic
     Promise.all(
@@ -153,32 +206,32 @@ export default async function AdminPage() {
           .then(({ data }) => ({ id, lastActiveAt: data?.created_at ?? null })),
       ),
     ),
-    // Appointments scheduled today
+    // Appointments scheduled in selected range
     admin
       .from('appointments')
       .select('*', { count: 'exact', head: true })
-      .gte('starts_at', todayStartIso)
-      .lte('starts_at', todayEndIso)
+      .gte('starts_at', rangeStartIso)
+      .lte('starts_at', rangeEndIso)
       .in('status', ['pending', 'confirmed', 'completed']),
-    // Revenue today
+    // Revenue from completed appointments in selected range
     admin
       .from('appointments')
       .select('price, service:services(price)')
       .eq('status', 'completed')
-      .gte('starts_at', todayStartIso)
-      .lte('starts_at', todayEndIso),
-    // Appointments scheduled this month
+      .gte('starts_at', rangeStartIso)
+      .lte('starts_at', rangeEndIso),
+    // New clinics created in selected range
     admin
-      .from('appointments')
+      .from('clinics')
       .select('*', { count: 'exact', head: true })
-      .gte('starts_at', monthStartIso)
-      .in('status', ['pending', 'confirmed', 'completed']),
-    // Revenue this month
+      .gte('created_at', rangeStartIso)
+      .lte('created_at', rangeEndIso),
+    // New clients added in selected range
     admin
-      .from('appointments')
-      .select('price, service:services(price)')
-      .eq('status', 'completed')
-      .gte('starts_at', monthStartIso),
+      .from('clients')
+      .select('*', { count: 'exact', head: true })
+      .gte('created_at', rangeStartIso)
+      .lte('created_at', rangeEndIso),
   ])
 
   const clientMap   = new Map(clientCounts.map(({ id, count }) => [id, count]))
@@ -232,22 +285,21 @@ export default async function AdminPage() {
       0,
     )
 
-  const appointmentsToday = aptsTodayRes.count ?? 0
-  const revenueToday = sumPrice(revenueTodayRes.data)
-  const appointmentsThisMonth = aptsThisMonthRes.count ?? 0
-  const revenueThisMonth = sumPrice(revenueThisMonthRes.data)
-  const newClinicsThisMonth = rows.filter((c) => parseISO(c.created_at) >= monthStart).length
+  const appointmentsInRange = aptsInRangeRes.count ?? 0
+  const revenueInRange = sumPrice(revenueInRangeRes.data)
+  const newClinicsInRange = newClinicsInRangeRes.count ?? 0
+  const newClientsInRange = newClientsInRangeRes.count ?? 0
 
   return (
     <AdminClient
       clinics={rows}
       adminEmail={user.email}
       mrr={mrr}
-      appointmentsToday={appointmentsToday}
-      revenueToday={revenueToday}
-      appointmentsThisMonth={appointmentsThisMonth}
-      revenueThisMonth={revenueThisMonth}
-      newClinicsThisMonth={newClinicsThisMonth}
+      range={{ key: range.key, startIso: range.startIso, endIso: range.endIso, label: range.label, date: range.date }}
+      appointmentsInRange={appointmentsInRange}
+      revenueInRange={revenueInRange}
+      newClinicsInRange={newClinicsInRange}
+      newClientsInRange={newClientsInRange}
       isDev={isDev}
     />
   )

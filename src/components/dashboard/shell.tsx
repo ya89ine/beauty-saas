@@ -165,15 +165,15 @@ export function DashboardShell({ user, clinic, children }: Props) {
         </SidebarFooter>
       </Sidebar>
 
-      <SidebarInset>
-        <header className="flex h-14 items-center border-b px-4 lg:hidden">
+      <SidebarInset className="bg-surface-muted">
+        <header className="flex h-14 items-center border-b border-border bg-background/80 px-4 backdrop-blur-md lg:hidden">
           <SidebarTrigger />
           <div className="ml-3 flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
             <span className="font-semibold">GlowBook</span>
           </div>
         </header>
-        <main className="flex-1 p-6">{children}</main>
+        <main className="flex-1 p-6 lg:p-10">{children}</main>
       </SidebarInset>
     </SidebarProvider>
   )

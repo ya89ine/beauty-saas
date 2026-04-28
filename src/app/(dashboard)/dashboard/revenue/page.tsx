@@ -27,7 +27,7 @@ export default async function RevenuePage() {
   if (!clinic) {
     return (
       <div className="flex flex-col items-start gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">Revenue</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Revenue</h1>
         <p className="text-sm text-muted-foreground">
           You don&apos;t have a clinic set up yet.
         </p>

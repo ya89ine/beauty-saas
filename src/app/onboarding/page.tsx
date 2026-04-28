@@ -27,22 +27,22 @@ export default async function OnboardingPage() {
   if (clinic) redirect('/dashboard')
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-muted/40 px-4 py-12">
+    <div className="bg-surface-gradient flex min-h-screen flex-col items-center justify-center px-4 py-12">
       <div className="w-full max-w-lg">
         <div className="mb-8 text-center">
           <div className="mb-4 flex justify-center">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary">
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary shadow-card">
               <Sparkles className="h-6 w-6 text-primary-foreground" />
             </div>
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-3xl font-semibold tracking-tight">
             Set up your beauty center
           </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <p className="mt-2.5 text-sm text-muted-foreground">
             This takes less than a minute. You can update everything later.
           </p>
         </div>
-        <div className="rounded-2xl border bg-card p-8 shadow-sm">
+        <div className="rounded-2xl border border-border bg-card/95 p-8 shadow-card backdrop-blur-sm">
           <OnboardingForm />
         </div>
       </div>

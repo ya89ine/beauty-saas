@@ -24,7 +24,7 @@ import { adminGateInputs } from '@/lib/admin'
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  if (pathname.startsWith('/admin')) {
+  if (pathname.startsWith('/admin') && pathname !== '/admin/login') {
     const { response, user } = await updateSession(request)
     const gate = adminGateInputs(user?.email)
 

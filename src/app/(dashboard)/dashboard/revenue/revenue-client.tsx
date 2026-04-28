@@ -243,7 +243,7 @@ export function RevenueClient({ appointments, staffList }: Props) {
   return (
     <div className="flex flex-col gap-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Revenue</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">Revenue</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Track payments and appointment revenue
         </p>
@@ -320,7 +320,7 @@ export function RevenueClient({ appointments, staffList }: Props) {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-xl border bg-card shadow-sm">
+      <div className="overflow-hidden rounded-2xl border border-border bg-card shadow-card">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b bg-muted/40 hover:bg-muted/40">

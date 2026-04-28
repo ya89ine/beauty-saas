@@ -96,10 +96,10 @@ export function ServicesClient({ services }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Services</h1>
+          <h1 className="text-3xl font-semibold tracking-tight">Services</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Configure the treatments you offer and their pricing
           </p>
@@ -111,7 +111,7 @@ export function ServicesClient({ services }: Props) {
       </div>
 
       {services.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 rounded-xl border bg-card py-24 text-center shadow-sm">
+        <div className="flex flex-col items-center gap-3 rounded-2xl border border-border bg-card py-24 text-center shadow-card">
           <Scissors className="h-10 w-10 text-muted-foreground/40" />
           <p className="font-medium">No services yet</p>
           <p className="text-sm text-muted-foreground">
@@ -123,7 +123,7 @@ export function ServicesClient({ services }: Props) {
           </Button>
         </div>
       ) : (
-        <div className="rounded-xl border bg-card shadow-sm">
+        <div className="rounded-2xl border border-border bg-card shadow-card">
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/40 hover:bg-muted/40">

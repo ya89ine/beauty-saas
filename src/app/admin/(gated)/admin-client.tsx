@@ -1,10 +1,19 @@
 'use client'
 
 import { useState, useTransition, useMemo, useEffect, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { format, parseISO, differenceInCalendarDays, formatDistanceToNow } from 'date-fns'
 import { setClinicStatus, saveClinicNotes, saveClinicBilling, createClinic, extendTrial } from './actions'
 import { seedDemoData, clearDemoData } from './seed-actions'
 import { toast } from 'sonner'
+
+export type DateRangeInfo = {
+  key: 'today' | 'yesterday' | 'week' | 'custom'
+  startIso: string
+  endIso: string
+  label: string
+  date: string | null  // YYYY-MM-DD when single-day, null for "week"
+}
 
 type SubscriptionStatus = 'trial' | 'active' | 'paused'
 
@@ -1370,6 +1379,107 @@ function AlertCard({
   )
 }
 
+// ── Date filter (server-side via search params) ───────────────────────────────
+
+function DateFilter({ range }: { range: DateRangeInfo }) {
+  const router = useRouter()
+  const [isPending, startTransition] = useTransition()
+
+  function go(params: Record<string, string | null>) {
+    const usp = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== null && v !== '') usp.set(k, v)
+    }
+    const qs = usp.toString()
+    startTransition(() => {
+      router.push(qs ? `/admin?${qs}` : '/admin', { scroll: false })
+    })
+  }
+
+  const chips: Array<{ key: DateRangeInfo['key']; label: string; onClick: () => void }> = [
+    { key: 'today',     label: 'Today',     onClick: () => go({ range: 'today' }) },
+    { key: 'yesterday', label: 'Yesterday', onClick: () => go({ range: 'yesterday' }) },
+    { key: 'week',      label: 'This week', onClick: () => go({ range: 'week' }) },
+  ]
+
+  // Drive the date input from `range.date` so it stays in sync with the URL.
+  // For "this week" it's blank — picking a date switches to "custom".
+  const dateValue = range.date ?? ''
+
+  return (
+    <section className="rounded-xl border bg-card p-3 shadow-sm">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary/10 text-primary">
+            <IconCalendar />
+          </span>
+          <div className="leading-tight">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Period
+            </p>
+            <p className="text-sm font-semibold tabular-nums">{range.label}</p>
+          </div>
+        </div>
+
+        <div className="h-7 w-px bg-border" aria-hidden="true" />
+
+        <div className="flex items-center gap-1" role="group" aria-label="Quick date filters">
+          {chips.map((c) => {
+            const active = range.key === c.key
+            return (
+              <button
+                key={c.key}
+                type="button"
+                onClick={c.onClick}
+                disabled={isPending}
+                aria-pressed={active}
+                className={`h-8 rounded-md px-3 text-xs font-semibold transition-colors disabled:opacity-60 ${
+                  active
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'border border-input bg-background text-foreground hover:bg-muted'
+                }`}
+              >
+                {c.label}
+              </button>
+            )
+          })}
+        </div>
+
+        <div className="h-7 w-px bg-border" aria-hidden="true" />
+
+        <label className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Pick date
+          </span>
+          <input
+            type="date"
+            value={dateValue}
+            disabled={isPending}
+            onChange={(e) => {
+              const v = e.target.value
+              if (v) go({ date: v })
+              else go({ range: 'today' })
+            }}
+            className="h-8 rounded-md border border-input bg-background px-2.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring/50 disabled:opacity-60"
+          />
+        </label>
+
+        {range.key !== 'today' && (
+          <button
+            type="button"
+            onClick={() => go({ range: 'today' })}
+            disabled={isPending}
+            className="ml-auto inline-flex h-8 items-center gap-1 rounded-md px-2.5 text-[11px] font-semibold text-muted-foreground hover:bg-muted hover:text-foreground transition-colors disabled:opacity-60"
+          >
+            Reset to today
+            <IconX />
+          </button>
+        )}
+      </div>
+    </section>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 type EditModal = { type: 'billing' | 'notes'; clinic: ClinicRow } | null
@@ -1379,21 +1489,21 @@ export function AdminClient({
   clinics,
   adminEmail,
   mrr,
-  appointmentsToday,
-  revenueToday,
-  appointmentsThisMonth,
-  revenueThisMonth,
-  newClinicsThisMonth,
+  range,
+  appointmentsInRange,
+  revenueInRange,
+  newClinicsInRange,
+  newClientsInRange,
   isDev,
 }: {
   clinics: ClinicRow[]
   adminEmail: string
   mrr: number
-  appointmentsToday: number
-  revenueToday: number
-  appointmentsThisMonth: number
-  revenueThisMonth: number
-  newClinicsThisMonth: number
+  range: DateRangeInfo
+  appointmentsInRange: number
+  revenueInRange: number
+  newClinicsInRange: number
+  newClientsInRange: number
   isDev: boolean
 }) {
   const [search, setSearch] = useState('')
@@ -1642,18 +1752,20 @@ export function AdminClient({
           </div>
         </section>
 
-        {/* ── Activity snapshot ─────────────────────────────────────────── */}
+        {/* ── Date filter ───────────────────────────────────────────────── */}
+        <DateFilter range={range} />
+
+        {/* ── Activity snapshot (range-filtered) ────────────────────────── */}
         <section>
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Activity · Today / {format(now, 'MMM yyyy')}
+            Activity · {range.label}
           </h2>
-          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border bg-border md:grid-cols-3 lg:grid-cols-6">
-            <DataCell label="Appts today"      value={appointmentsToday} />
-            <DataCell label="Revenue today"    value={formatDH(revenueToday)} />
-            <DataCell label="Appts this mo."   value={appointmentsThisMonth} />
-            <DataCell label="Revenue this mo." value={formatDH(revenueThisMonth)} />
-            <DataCell label="GMV all-time"     value={formatDH(totalRevenue)} />
-            <DataCell label="New clinics mo."  value={newClinicsThisMonth} />
+          <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border bg-border md:grid-cols-3 lg:grid-cols-5">
+            <DataCell label="Appointments"   value={appointmentsInRange} />
+            <DataCell label="Revenue"        value={formatDH(revenueInRange)} />
+            <DataCell label="New clinics"    value={newClinicsInRange} />
+            <DataCell label="New clients"    value={newClientsInRange} />
+            <DataCell label="GMV all-time"   value={formatDH(totalRevenue)} />
           </div>
         </section>
 

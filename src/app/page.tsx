@@ -5,15 +5,15 @@ import { Calendar, Users, Sparkles, ArrowRight, Star } from 'lucide-react'
 
 export default function LandingPage() {
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="bg-surface-gradient flex min-h-screen flex-col">
       {/* Nav */}
-      <header className="sticky top-0 z-50 border-b bg-background/80 backdrop-blur-sm">
+      <header className="sticky top-0 z-50 border-b border-border/60 bg-background/70 backdrop-blur-md">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
           <div className="flex items-center gap-2">
             <Sparkles className="h-5 w-5 text-primary" />
             <span className="text-lg font-semibold tracking-tight">GlowBook</span>
           </div>
-          <nav className="flex items-center gap-3">
+          <nav className="flex items-center gap-2">
             <Button variant="ghost" size="sm" render={<Link href="/login" />}>
               Sign in
             </Button>
@@ -25,44 +25,64 @@ export default function LandingPage() {
       </header>
 
       {/* Hero */}
-      <section className="flex flex-1 flex-col items-center justify-center px-6 py-24 text-center">
-        <Badge variant="secondary" className="mb-6 gap-1.5">
+      <section className="flex flex-1 flex-col items-center justify-center px-6 py-28 text-center">
+        <Badge variant="secondary" className="mb-6 gap-1.5 border border-border/70 bg-card/60 backdrop-blur">
           <Star className="h-3 w-3 fill-primary text-primary" />
           Built for beauty professionals
         </Badge>
-        <h1 className="max-w-2xl text-4xl font-bold tracking-tight text-foreground sm:text-5xl lg:text-6xl">
+        <h1 className="max-w-3xl text-5xl font-semibold tracking-tight text-foreground sm:text-6xl lg:text-7xl">
           Manage your beauty center{' '}
-          <span className="text-primary">effortlessly</span>
+          <span className="bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
+            effortlessly
+          </span>
         </h1>
-        <p className="mt-6 max-w-xl text-lg text-muted-foreground">
+        <p className="mt-8 max-w-xl text-lg leading-relaxed text-muted-foreground">
           Appointments, clients, staff, and services — all in one clean dashboard.
           Let your clients book online while you focus on what you do best.
         </p>
-        <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row">
-          <Button size="lg" className="gap-2" render={<Link href="/signup" />}>
+        <div className="mt-10 flex flex-col items-center gap-3 sm:flex-row">
+          <Button size="lg" className="h-11 gap-2 px-6 text-sm" render={<Link href="/signup" />}>
             Start free trial
             <ArrowRight className="h-4 w-4" />
           </Button>
-          <Button size="lg" variant="outline" render={<Link href="/login" />}>
+          <Button
+            size="lg"
+            variant="outline"
+            className="h-11 px-6 text-sm"
+            render={<Link href="/login" />}
+          >
             Sign in to dashboard
           </Button>
         </div>
+        <p className="mt-6 text-xs text-muted-foreground">
+          14-day free trial · No credit card required
+        </p>
       </section>
 
       {/* Features */}
-      <section className="border-t bg-muted/40 px-6 py-20">
+      <section className="border-t border-border/60 bg-background/70 px-6 py-24 backdrop-blur-sm">
         <div className="mx-auto max-w-5xl">
-          <h2 className="mb-12 text-center text-2xl font-semibold tracking-tight">
-            Everything you need
-          </h2>
-          <div className="grid gap-8 sm:grid-cols-3">
+          <div className="mb-14 flex flex-col items-center text-center">
+            <h2 className="text-3xl font-semibold tracking-tight">
+              Everything you need
+            </h2>
+            <p className="mt-3 max-w-md text-sm text-muted-foreground">
+              Premium tools, designed for the way your studio actually works.
+            </p>
+          </div>
+          <div className="grid gap-6 sm:grid-cols-3">
             {features.map((f) => (
-              <div key={f.title} className="flex flex-col gap-3 rounded-xl border bg-card p-6 shadow-sm">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                  <f.Icon className="h-5 w-5 text-primary" />
+              <div
+                key={f.title}
+                className="group flex flex-col gap-4 rounded-2xl border border-border bg-card p-6 shadow-card transition-shadow duration-200 hover:shadow-card-hover"
+              >
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                  <f.Icon className="h-5 w-5" />
                 </div>
-                <h3 className="font-semibold">{f.title}</h3>
-                <p className="text-sm text-muted-foreground">{f.description}</p>
+                <div className="flex flex-col gap-1.5">
+                  <h3 className="font-semibold tracking-tight">{f.title}</h3>
+                  <p className="text-sm leading-relaxed text-muted-foreground">{f.description}</p>
+                </div>
               </div>
             ))}
           </div>
@@ -70,7 +90,7 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="border-t px-6 py-8 text-center text-sm text-muted-foreground">
+      <footer className="border-t border-border/60 px-6 py-8 text-center text-sm text-muted-foreground">
         © {new Date().getFullYear()} GlowBook. All rights reserved.
       </footer>
     </div>

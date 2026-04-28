@@ -44,6 +44,26 @@ export async function signIn(
   redirect(isAdminEmail(email) ? '/admin' : '/dashboard')
 }
 
+export async function signInAdmin(
+  _prev: AuthResult | undefined,
+  formData: FormData
+): Promise<AuthResult> {
+  const email = formData.get('email') as string
+  const password = formData.get('password') as string
+
+  if (!isAdminEmail(email)) {
+    return { error: 'Unauthorized' }
+  }
+
+  const supabase = await createClient()
+  const { error } = await supabase.auth.signInWithPassword({ email, password })
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/', 'layout')
+  redirect('/admin')
+}
+
 export async function signOut() {
   const supabase = await createClient()
   await supabase.auth.signOut()

@@ -27,7 +27,7 @@ export default async function PackagesPage() {
   if (!clinic) {
     return (
       <div className="flex flex-col items-start gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <h1 className="text-3xl font-semibold tracking-tight">
           Treatment Packages
         </h1>
         <p className="text-sm text-muted-foreground">

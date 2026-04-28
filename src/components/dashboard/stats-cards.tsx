@@ -31,26 +31,39 @@ function StatCard({
   label,
   value,
   Icon,
-  iconClass,
-  iconBg,
-  accent,
+  emphasis = false,
 }: {
   label: string
   value: string | number
   Icon: React.ComponentType<{ className?: string }>
-  iconClass: string
-  iconBg: string
-  accent: string
+  emphasis?: boolean
 }) {
   return (
-    <div className={`flex items-center gap-4 rounded-xl border border-l-4 ${accent} bg-card p-5 shadow-sm`}>
-      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${iconBg}`}>
-        <Icon className={`h-5 w-5 ${iconClass}`} />
+    <div className="group relative flex flex-col gap-3 overflow-hidden rounded-xl border border-border bg-card p-5 shadow-card transition-shadow duration-200 hover:shadow-card-hover">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+          {label}
+        </p>
+        <div
+          className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+            emphasis ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+          }`}
+        >
+          <Icon className="h-4 w-4" />
+        </div>
       </div>
-      <div className="min-w-0">
-        <p className="text-3xl font-bold leading-none tracking-tight tabular-nums">{value}</p>
-        <p className="mt-1.5 text-xs text-muted-foreground">{label}</p>
-      </div>
+      <p className="text-3xl font-semibold leading-none tracking-tight tabular-nums text-foreground">
+        {value}
+      </p>
+    </div>
+  )
+}
+
+function SectionHeading({ title }: { title: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <h2 className="text-sm font-medium text-foreground">{title}</h2>
+      <div className="h-px flex-1 bg-border" />
     </div>
   )
 }
@@ -67,33 +80,40 @@ export function StatsCards({
   revenueThisMonth,
   currency,
 }: Props) {
-  const countStats = [
-    { label: "Today's appointments", value: todayCount,         Icon: Calendar,    iconClass: 'text-violet-600', iconBg: 'bg-violet-50',  accent: 'border-l-violet-500' },
-    { label: 'Pending confirmations', value: pendingCount,      Icon: AlertCircle, iconClass: 'text-amber-600',  iconBg: 'bg-amber-50',   accent: 'border-l-amber-400'  },
-    { label: 'Total clients',         value: totalClients,      Icon: Users,       iconClass: 'text-blue-600',   iconBg: 'bg-blue-50',    accent: 'border-l-blue-500'   },
-    { label: 'All-time appointments', value: totalAppointments, Icon: Clock,       iconClass: 'text-emerald-600',iconBg: 'bg-emerald-50', accent: 'border-l-emerald-500'},
-    { label: 'Staff members',         value: totalStaff,        Icon: UserCheck,   iconClass: 'text-pink-600',   iconBg: 'bg-pink-50',    accent: 'border-l-pink-500'   },
-    { label: 'Services offered',      value: totalServices,     Icon: Scissors,    iconClass: 'text-rose-600',   iconBg: 'bg-rose-50',    accent: 'border-l-rose-500'   },
+  const overviewStats = [
+    { label: "Today's appointments", value: todayCount,         Icon: Calendar,    emphasis: true },
+    { label: 'Pending confirmations', value: pendingCount,      Icon: AlertCircle, emphasis: true },
+    { label: 'Total clients',         value: totalClients,      Icon: Users },
+    { label: 'All-time appointments', value: totalAppointments, Icon: Clock },
+    { label: 'Staff members',         value: totalStaff,        Icon: UserCheck },
+    { label: 'Services offered',      value: totalServices,     Icon: Scissors },
   ]
 
   const revenueStats = [
-    { label: 'Revenue today',      value: formatCurrency(revenueToday,      currency), Icon: TrendingUp, iconClass: 'text-teal-600',   iconBg: 'bg-teal-50',   accent: 'border-l-teal-500'   },
-    { label: 'Revenue this week',  value: formatCurrency(revenueThisWeek,   currency), Icon: TrendingUp, iconClass: 'text-cyan-600',   iconBg: 'bg-cyan-50',   accent: 'border-l-cyan-500'   },
-    { label: 'Revenue this month', value: formatCurrency(revenueThisMonth,  currency), Icon: TrendingUp, iconClass: 'text-indigo-600', iconBg: 'bg-indigo-50', accent: 'border-l-indigo-500' },
+    { label: 'Revenue today',      value: formatCurrency(revenueToday,      currency), Icon: TrendingUp },
+    { label: 'Revenue this week',  value: formatCurrency(revenueThisWeek,   currency), Icon: TrendingUp },
+    { label: 'Revenue this month', value: formatCurrency(revenueThisMonth,  currency), Icon: TrendingUp, emphasis: true },
   ]
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {countStats.map(({ label, value, Icon, iconClass, iconBg, accent }) => (
-          <StatCard key={label} label={label} value={value} Icon={Icon} iconClass={iconClass} iconBg={iconBg} accent={accent} />
-        ))}
-      </div>
-      <div className="grid gap-4 sm:grid-cols-3">
-        {revenueStats.map(({ label, value, Icon, iconClass, iconBg, accent }) => (
-          <StatCard key={label} label={label} value={value} Icon={Icon} iconClass={iconClass} iconBg={iconBg} accent={accent} />
-        ))}
-      </div>
+    <div className="flex flex-col gap-8">
+      <section className="flex flex-col gap-4">
+        <SectionHeading title="Overview" />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {overviewStats.map((s) => (
+            <StatCard key={s.label} {...s} />
+          ))}
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-4">
+        <SectionHeading title="Revenue" />
+        <div className="grid gap-4 sm:grid-cols-3">
+          {revenueStats.map((s) => (
+            <StatCard key={s.label} {...s} />
+          ))}
+        </div>
+      </section>
     </div>
   )
 }
