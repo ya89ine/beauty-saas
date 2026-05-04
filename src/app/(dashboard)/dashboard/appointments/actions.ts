@@ -9,6 +9,20 @@ import type { Database } from '@/types/database'
 type Result = { error?: string; success?: boolean }
 type AptStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed' | 'no_show'
 
+// Format a Supabase/PostgREST error into a single human-readable string that's
+// safe to surface to the UI. Includes the message plus details/hint when
+// present so constraint violations and RLS denials are diagnosable without
+// needing the server logs.
+function fmtSupabaseError(
+  prefix: string,
+  err: { message?: string; details?: string | null; hint?: string | null; code?: string | null } | null | undefined,
+): string {
+  if (!err) return prefix
+  const parts = [err.message, err.details, err.hint].filter(Boolean) as string[]
+  const body = parts.length > 0 ? parts.join(' — ') : 'unknown error'
+  return err.code ? `${prefix}: ${body} (${err.code})` : `${prefix}: ${body}`
+}
+
 // Calendar slot granularity. Server-side enforcement of this guarantees that
 // drag/snap and direct API edits both keep the schedule on the same grid; the
 // overlap check in `findStaffConflict` is exact at minute precision, so any
@@ -168,108 +182,133 @@ async function resolveClientForAppointment(
     .insert({ clinic_id: clinicId, name, email, phone })
     .select('id, name, email, phone')
     .single()
-  if (createErr || !created) return { error: 'Failed to create client' }
+  if (createErr) {
+    console.error('[appointments.resolveClient] insert clients failed', createErr)
+    return { error: fmtSupabaseError('Failed to create client', createErr) }
+  }
+  if (!created) return { error: 'Failed to create client (no row returned)' }
   return { clientId: created.id, name: created.name, email: created.email, phone: created.phone }
 }
 
 export async function createAppointment(formData: FormData): Promise<Result> {
-  const auth = await getAuthorizedClinic()
-  if ('error' in auth) return { error: auth.error }
-  const { clinicId } = auth
+  try {
+    const auth = await getAuthorizedClinic()
+    if ('error' in auth) return { error: auth.error }
+    const { clinicId } = auth
 
-  const clientName = ((formData.get('client_name') as string) ?? '').trim()
-  const serviceId = (formData.get('service_id') as string) ?? ''
-  const startsAtStr = (formData.get('starts_at') as string) ?? ''
+    const clientName = ((formData.get('client_name') as string) ?? '').trim()
+    const serviceId = (formData.get('service_id') as string) ?? ''
+    const startsAtStr = (formData.get('starts_at') as string) ?? ''
 
-  if (!clientName) return { error: 'Client name is required' }
-  if (!serviceId) return { error: 'Service is required' }
-  if (!startsAtStr) return { error: 'Start date/time is required' }
+    if (!clientName) return { error: 'Client name is required' }
+    if (!serviceId) return { error: 'Service is required' }
+    if (!startsAtStr) return { error: 'Start date/time is required' }
 
-  const admin = createAdminClient()
+    const admin = createAdminClient()
 
-  const { data: service } = await admin
-    .from('services')
-    .select('duration_minutes')
-    .eq('id', serviceId)
-    .eq('clinic_id', clinicId)
-    .single()
+    const { data: service, error: serviceErr } = await admin
+      .from('services')
+      .select('duration_minutes')
+      .eq('id', serviceId)
+      .eq('clinic_id', clinicId)
+      .single()
 
-  if (!service) return { error: 'Service not found' }
+    if (serviceErr) {
+      console.error('[appointments.create] service lookup failed', serviceErr)
+      // PostgREST returns code PGRST116 when .single() finds zero rows — that's
+      // a "not found" condition, not a real DB failure, so keep the friendlier
+      // wording. Anything else (RLS denial, network) surfaces verbatim.
+      if (serviceErr.code === 'PGRST116') return { error: 'Service not found' }
+      return { error: fmtSupabaseError('Failed to load service', serviceErr) }
+    }
+    if (!service) return { error: 'Service not found' }
 
-  const duration = parseDuration(formData.get('duration_minutes'), service.duration_minutes)
-  if (duration === null) return { error: 'Invalid duration' }
-  if (duration % SLOT_MINUTES !== 0) {
-    return { error: `Duration must be a multiple of ${SLOT_MINUTES} minutes` }
+    const duration = parseDuration(formData.get('duration_minutes'), service.duration_minutes)
+    if (duration === null) return { error: 'Invalid duration' }
+    if (duration % SLOT_MINUTES !== 0) {
+      return { error: `Duration must be a multiple of ${SLOT_MINUTES} minutes` }
+    }
+
+    const startsAt = new Date(startsAtStr)
+    if (isNaN(startsAt.getTime())) return { error: 'Invalid start date/time' }
+    if (!isOnSlot(startsAt)) {
+      return { error: `Start time must align to a ${SLOT_MINUTES}-minute slot (00, 15, 30, 45)` }
+    }
+    const endsAt = new Date(startsAt.getTime() + duration * 60_000)
+
+    const staffId = (formData.get('staff_id') as string) || null
+    const explicitPackageId = (formData.get('package_id') as string) || null
+    const newStatus = ((formData.get('status') as string) || 'pending') as AptStatus
+
+    // Overlap check: only enforced when a staff member is assigned and the new
+    // appointment is not itself cancelled.
+    if (staffId && newStatus !== 'cancelled') {
+      const conflict = await findStaffConflict(admin, clinicId, staffId, startsAt.toISOString(), endsAt.toISOString(), null)
+      if (conflict) return { error: formatConflict(conflict) }
+    }
+
+    const resolved = await resolveClientForAppointment(admin, clinicId, {
+      clientIdRaw: ((formData.get('client_id') as string) ?? '').trim(),
+      name: clientName,
+      email: ((formData.get('client_email') as string) ?? '').trim() || null,
+      phone: ((formData.get('client_phone') as string) ?? '').trim() || null,
+    })
+    if ('error' in resolved) return { error: resolved.error }
+
+    // Auto-link to an active package matching this (client, service) pair so the
+    // CRM's session counter stays accurate without a separate "link package"
+    // step in the UI. An explicit package_id from the caller still wins.
+    const packageId =
+      explicitPackageId ?? (await findActivePackageForAppointment(admin, clinicId, resolved.clientId, serviceId))
+
+    // Snapshot the price at booking time so historical revenue stays correct
+    // even if the service's price is later edited.
+    const { data: serviceFull, error: priceErr } = await admin
+      .from('services')
+      .select('price')
+      .eq('id', serviceId)
+      .eq('clinic_id', clinicId)
+      .single()
+    if (priceErr) {
+      console.error('[appointments.create] service price lookup failed', priceErr)
+      return { error: fmtSupabaseError('Failed to load service price', priceErr) }
+    }
+
+    const { error } = await admin.from('appointments').insert({
+      clinic_id: clinicId,
+      client_id: resolved.clientId,
+      client_name: resolved.name,
+      client_email: resolved.email,
+      client_phone: resolved.phone,
+      service_id: serviceId,
+      staff_id: staffId,
+      starts_at: startsAt.toISOString(),
+      ends_at: endsAt.toISOString(),
+      status: newStatus,
+      notes: (formData.get('notes') as string) || null,
+      package_id: packageId,
+      price: serviceFull?.price ?? null,
+    })
+
+    if (error) {
+      console.error('[appointments.create] insert appointments failed', error)
+      return { error: fmtSupabaseError('Failed to create appointment', error) }
+    }
+
+    if (newStatus === 'completed' && packageId) {
+      await incrementPackageSessions(admin, packageId)
+    }
+
+    revalidatePath('/dashboard/appointments')
+    revalidatePath('/dashboard/packages')
+    revalidatePath('/dashboard/clients')
+    revalidatePath('/dashboard')
+    return { success: true }
+  } catch (e) {
+    console.error('[appointments.create] unexpected error', e)
+    const msg = e instanceof Error ? e.message : String(e)
+    return { error: `Failed to create appointment: ${msg}` }
   }
-
-  const startsAt = new Date(startsAtStr)
-  if (isNaN(startsAt.getTime())) return { error: 'Invalid start date/time' }
-  if (!isOnSlot(startsAt)) {
-    return { error: `Start time must align to a ${SLOT_MINUTES}-minute slot (00, 15, 30, 45)` }
-  }
-  const endsAt = new Date(startsAt.getTime() + duration * 60_000)
-
-  const staffId = (formData.get('staff_id') as string) || null
-  const explicitPackageId = (formData.get('package_id') as string) || null
-  const newStatus = ((formData.get('status') as string) || 'pending') as AptStatus
-
-  // Overlap check: only enforced when a staff member is assigned and the new
-  // appointment is not itself cancelled.
-  if (staffId && newStatus !== 'cancelled') {
-    const conflict = await findStaffConflict(admin, clinicId, staffId, startsAt.toISOString(), endsAt.toISOString(), null)
-    if (conflict) return { error: formatConflict(conflict) }
-  }
-
-  const resolved = await resolveClientForAppointment(admin, clinicId, {
-    clientIdRaw: ((formData.get('client_id') as string) ?? '').trim(),
-    name: clientName,
-    email: ((formData.get('client_email') as string) ?? '').trim() || null,
-    phone: ((formData.get('client_phone') as string) ?? '').trim() || null,
-  })
-  if ('error' in resolved) return { error: resolved.error }
-
-  // Auto-link to an active package matching this (client, service) pair so the
-  // CRM's session counter stays accurate without a separate "link package"
-  // step in the UI. An explicit package_id from the caller still wins.
-  const packageId =
-    explicitPackageId ?? (await findActivePackageForAppointment(admin, clinicId, resolved.clientId, serviceId))
-
-  // Snapshot the price at booking time so historical revenue stays correct
-  // even if the service's price is later edited.
-  const { data: serviceFull } = await admin
-    .from('services')
-    .select('price')
-    .eq('id', serviceId)
-    .eq('clinic_id', clinicId)
-    .single()
-
-  const { error } = await admin.from('appointments').insert({
-    clinic_id: clinicId,
-    client_id: resolved.clientId,
-    client_name: resolved.name,
-    client_email: resolved.email,
-    client_phone: resolved.phone,
-    service_id: serviceId,
-    staff_id: staffId,
-    starts_at: startsAt.toISOString(),
-    ends_at: endsAt.toISOString(),
-    status: newStatus,
-    notes: (formData.get('notes') as string) || null,
-    package_id: packageId,
-    price: serviceFull?.price ?? null,
-  })
-
-  if (error) return { error: 'Failed to create appointment' }
-
-  if (newStatus === 'completed' && packageId) {
-    await incrementPackageSessions(admin, packageId)
-  }
-
-  revalidatePath('/dashboard/appointments')
-  revalidatePath('/dashboard/packages')
-  revalidatePath('/dashboard/clients')
-  revalidatePath('/dashboard')
-  return { success: true }
 }
 
 export async function updateAppointment(id: string, formData: FormData): Promise<Result> {
