@@ -502,17 +502,26 @@ function SchedulerView({
           <div className="w-14 shrink-0 flex flex-col">
             {/* Spacer matching the sticky header height */}
             <div className="sticky top-0 z-20 h-10 bg-card border-b" />
-            {/* Hour labels */}
+            {/* Hour + quarter-hour labels */}
             <div className="relative" style={{ height: (DAY_END - DAY_START) * HOUR_HEIGHT }}>
-              {HOURS.map((h) => (
+              {HOURS.flatMap((h) => [
                 <div
-                  key={h}
+                  key={`h-${h}`}
                   className="absolute right-2 text-[11px] text-muted-foreground tabular-nums select-none"
                   style={{ top: (h - DAY_START) * HOUR_HEIGHT - 8 }}
                 >
                   {h === 12 ? '12pm' : h < 12 ? `${h}am` : `${h - 12}pm`}
-                </div>
-              ))}
+                </div>,
+                ...QUARTERS.slice(1).map((q) => (
+                  <div
+                    key={`q-${h}-${q}`}
+                    className="absolute right-2 text-[9px] text-muted-foreground/50 tabular-nums select-none"
+                    style={{ top: (h - DAY_START + q) * HOUR_HEIGHT - 6 }}
+                  >
+                    :{Math.round(q * 60).toString().padStart(2, '0')}
+                  </div>
+                )),
+              ])}
             </div>
           </div>
 
@@ -588,12 +597,18 @@ function WeekView({
       </div>
       <div className="flex overflow-y-auto overflow-x-auto" style={{ maxHeight: '62vh' }}>
         <div className="w-14 shrink-0 relative" style={{ height: (DAY_END - DAY_START) * HOUR_HEIGHT }}>
-          {HOURS.map((h) => (
-            <div key={h} className="absolute right-2 text-[11px] text-muted-foreground tabular-nums select-none"
+          {HOURS.flatMap((h) => [
+            <div key={`h-${h}`} className="absolute right-2 text-[11px] text-muted-foreground tabular-nums select-none"
               style={{ top: (h - DAY_START) * HOUR_HEIGHT - 8 }}>
               {h === 12 ? '12pm' : h < 12 ? `${h}am` : `${h - 12}pm`}
-            </div>
-          ))}
+            </div>,
+            ...QUARTERS.slice(1).map((q) => (
+              <div key={`q-${h}-${q}`} className="absolute right-2 text-[9px] text-muted-foreground/50 tabular-nums select-none"
+                style={{ top: (h - DAY_START + q) * HOUR_HEIGHT - 6 }}>
+                :{Math.round(q * 60).toString().padStart(2, '0')}
+              </div>
+            )),
+          ])}
         </div>
         {days.map((day) => {
           const dayApts = appointments.filter((a) => isSameDay(parseISO(a.starts_at), day))
