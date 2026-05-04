@@ -7,6 +7,23 @@ import { Plus, MoreHorizontal, Pencil, Trash2, Users, Mail, Phone } from 'lucide
 function getInitials(name: string): string {
   return name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
 }
+
+// Per-client roll-up computed server-side. Kept here as a public type so the
+// page component can share the shape with the table renderer.
+export type ClientBilling = {
+  paid: number
+  deliveredValue: number
+  committed: number
+  balance: number
+  sessionsUsed: number
+  sessionsRemaining: number
+  activePackages: number
+}
+
+function formatDH(n: number): string {
+  return `${n.toLocaleString('fr-MA', { minimumFractionDigits: 0, maximumFractionDigits: 2 })} DH`
+}
+
 import { toast } from 'sonner'
 import type { Client } from '@/types/database'
 import { createClient_, updateClient_, deleteClient_ } from './actions'
@@ -39,9 +56,20 @@ import {
 
 interface Props {
   clients: Client[]
+  billing: Map<string, ClientBilling>
 }
 
-export function ClientsClient({ clients }: Props) {
+const ZERO_BILLING: ClientBilling = {
+  paid: 0,
+  deliveredValue: 0,
+  committed: 0,
+  balance: 0,
+  sessionsUsed: 0,
+  sessionsRemaining: 0,
+  activePackages: 0,
+}
+
+export function ClientsClient({ clients, billing }: Props) {
   const router = useRouter()
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Client | null>(null)
@@ -125,60 +153,98 @@ export function ClientsClient({ clients }: Props) {
           </Button>
         </div>
       ) : (
-        <div className="rounded-2xl border border-border bg-card shadow-card">
+        <div className="rounded-2xl border border-border bg-card shadow-card overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/40 hover:bg-muted/40">
                 <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Name</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Email</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Phone</TableHead>
-                <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Date of birth</TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Contact</TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Sessions</TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">Paid</TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">Used value</TableHead>
+                <TableHead className="text-xs font-semibold uppercase tracking-wider text-muted-foreground text-right">Balance</TableHead>
                 <TableHead className="w-10" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {clients.map((c) => (
-                <TableRow key={c.id} className="hover:bg-muted/30">
-                  <TableCell>
-                    <div className="flex items-center gap-3">
-                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                        {getInitials(c.name)}
+              {clients.map((c) => {
+                const b = billing.get(c.id) ?? ZERO_BILLING
+                return (
+                  <TableRow key={c.id} className="hover:bg-muted/30">
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                          {getInitials(c.name)}
+                        </div>
+                        <span className="font-medium">{c.name}</span>
                       </div>
-                      <span className="font-medium">{c.name}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    {c.email
-                      ? <span className="flex items-center gap-1.5 text-muted-foreground text-sm"><Mail className="h-3 w-3 shrink-0" />{c.email}</span>
-                      : <span className="text-muted-foreground/40">—</span>}
-                  </TableCell>
-                  <TableCell>
-                    {c.phone
-                      ? <span className="flex items-center gap-1.5 text-muted-foreground text-sm"><Phone className="h-3 w-3 shrink-0" />{c.phone}</span>
-                      : <span className="text-muted-foreground/40">—</span>}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">{c.date_of_birth ?? <span className="text-muted-foreground/40">—</span>}</TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger render={<Button variant="ghost" size="icon" />}>
-                        <MoreHorizontal className="h-4 w-4" />
-                        <span className="sr-only">Actions</span>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => openEdit(c)}>
-                          <Pencil />
-                          Edit
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem variant="destructive" onClick={() => handleDelete(c)}>
-                          <Trash2 />
-                          Delete
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                        {c.email
+                          ? <span className="flex items-center gap-1.5"><Mail className="h-3 w-3 shrink-0" />{c.email}</span>
+                          : null}
+                        {c.phone
+                          ? <span className="flex items-center gap-1.5"><Phone className="h-3 w-3 shrink-0" />{c.phone}</span>
+                          : null}
+                        {!c.email && !c.phone && <span className="text-muted-foreground/40">—</span>}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col leading-tight">
+                        <span className="text-sm font-medium tabular-nums">
+                          {b.sessionsUsed} <span className="text-muted-foreground font-normal">used</span>
+                        </span>
+                        {b.activePackages > 0 ? (
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {b.sessionsRemaining} remaining · {b.activePackages} pkg
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground/60">No active package</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {b.paid > 0
+                        ? <span className="text-emerald-700">{formatDH(b.paid)}</span>
+                        : <span className="text-muted-foreground/40">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {b.deliveredValue > 0
+                        ? formatDH(b.deliveredValue)
+                        : <span className="text-muted-foreground/40">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {b.balance > 0 ? (
+                        <span className="font-medium text-amber-600">{formatDH(b.balance)}</span>
+                      ) : b.balance < 0 ? (
+                        <span className="font-medium text-emerald-700">+{formatDH(-b.balance)}</span>
+                      ) : (
+                        <span className="text-muted-foreground/60">{formatDH(0)}</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger render={<Button variant="ghost" size="icon" />}>
+                          <MoreHorizontal className="h-4 w-4" />
+                          <span className="sr-only">Actions</span>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => openEdit(c)}>
+                            <Pencil />
+                            Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem variant="destructive" onClick={() => handleDelete(c)}>
+                            <Trash2 />
+                            Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         </div>

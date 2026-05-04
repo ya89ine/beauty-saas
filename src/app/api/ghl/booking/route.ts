@@ -61,6 +61,11 @@ export async function POST(req: NextRequest) {
   if (isNaN(startsAt.getTime())) {
     return NextResponse.json({ error: `Invalid date/time value: "${startsAtRaw}"` }, { status: 400 })
   }
+  // Snap external bookings to the 15-min calendar grid. Snapping (rather than
+  // rejecting) keeps the webhook tolerant of off-grid times from upstream
+  // sources while still guaranteeing the calendar's 15-min invariant.
+  const SLOT_MINUTES = 15
+  startsAt.setMinutes(Math.floor(startsAt.getMinutes() / SLOT_MINUTES) * SLOT_MINUTES, 0, 0)
 
   const admin = createAdminClient()
 
@@ -158,3 +163,4 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ ok: true, appointment_id: appointment.id }, { status: 201 })
 }
+

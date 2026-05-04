@@ -6,6 +6,7 @@ import { Plus, MoreHorizontal, Pencil, Trash2, Scissors } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Service } from '@/types/database'
 import { createService, updateService, deleteService } from './actions'
+import { SERVICE_PALETTE, getServiceHex } from '@/lib/service-colors'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -43,17 +44,20 @@ export function ServicesClient({ services }: Props) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Service | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
+  const [color, setColor] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
 
   function openCreate() {
     setEditing(null)
     setFormError(null)
+    setColor(null)
     setOpen(true)
   }
 
   function openEdit(service: Service) {
     setEditing(service)
     setFormError(null)
+    setColor(service.color ?? null)
     setOpen(true)
   }
 
@@ -64,6 +68,7 @@ export function ServicesClient({ services }: Props) {
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     const formData = new FormData(e.currentTarget)
+    formData.set('color', color ?? '')
 
     startTransition(async () => {
       const result = editing
@@ -141,8 +146,8 @@ export function ServicesClient({ services }: Props) {
                   <TableCell>
                     <div className="flex items-center gap-2.5">
                       <span
-                        className="h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={{ backgroundColor: service.color ?? 'var(--primary)' }}
+                        className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-foreground/10"
+                        style={{ backgroundColor: getServiceHex(service) }}
                       />
                       <span className="font-medium">{service.name}</span>
                     </div>
@@ -274,6 +279,45 @@ export function ServicesClient({ services }: Props) {
                   defaultValue={editing?.price ?? 0}
                 />
               </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label>Color</Label>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {SERVICE_PALETTE.map((swatch) => {
+                  const selected = color?.toUpperCase() === swatch.hex.toUpperCase()
+                  return (
+                    <button
+                      key={swatch.hex}
+                      type="button"
+                      onClick={() => setColor(selected ? null : swatch.hex)}
+                      aria-label={swatch.label}
+                      aria-pressed={selected}
+                      title={swatch.label}
+                      className={`h-7 w-7 rounded-full transition-all ${
+                        selected
+                          ? 'ring-2 ring-offset-2 ring-foreground/60 scale-105'
+                          : 'ring-1 ring-foreground/10 hover:scale-110'
+                      }`}
+                      style={{ backgroundColor: swatch.hex }}
+                    />
+                  )
+                })}
+                {color && (
+                  <button
+                    type="button"
+                    onClick={() => setColor(null)}
+                    className="text-[11px] text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                  >
+                    Auto
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                {color
+                  ? 'Custom color selected.'
+                  : 'Auto: derived from category (laser/peeling/facial/slimming) or assigned automatically.'}
+              </p>
             </div>
 
             <div className="flex items-center gap-2">

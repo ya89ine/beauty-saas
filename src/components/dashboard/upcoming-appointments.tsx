@@ -1,6 +1,7 @@
 import { format } from 'date-fns'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Calendar } from 'lucide-react'
+import { getServiceColor } from '@/lib/service-colors'
 
 type Appointment = {
   id: string
@@ -9,6 +10,13 @@ type Appointment = {
   status: string
   client_name: string
   service_id: string
+}
+
+type ServiceLite = {
+  id: string
+  name: string
+  color: string | null
+  category: string | null
 }
 
 const STATUS_CONFIG: Record<string, { label: string; dot: string; text: string }> = {
@@ -23,7 +31,16 @@ function getInitials(name: string): string {
   return name.split(' ').map((n) => n[0]).join('').slice(0, 2).toUpperCase()
 }
 
-export function UpcomingAppointments({ appointments }: { appointments: Appointment[] }) {
+export function UpcomingAppointments({
+  appointments,
+  services = [],
+}: {
+  appointments: Appointment[]
+  services?: ServiceLite[]
+}) {
+  const colorById = new Map(
+    services.map((s) => [s.id, getServiceColor(s)] as const),
+  )
   return (
     <Card className="border shadow-sm">
       <CardHeader className="flex flex-row items-center gap-2 pb-3">
@@ -50,11 +67,19 @@ export function UpcomingAppointments({ appointments }: { appointments: Appointme
           <div className="divide-y">
             {appointments.map((apt, i) => {
               const status = STATUS_CONFIG[apt.status] ?? STATUS_CONFIG.pending
+              const c = colorById.get(apt.service_id) ?? getServiceColor({ id: apt.service_id })
               return (
                 <div
                   key={apt.id}
-                  className={`flex items-center gap-4 px-6 py-3.5 transition-colors hover:bg-muted/30 ${i === 0 ? 'border-t' : ''}`}
+                  className={`relative flex items-center gap-4 px-6 py-3.5 transition-colors hover:bg-muted/30 ${i === 0 ? 'border-t' : ''}`}
                 >
+                  {/* Service color stripe (left) */}
+                  <span
+                    className="absolute left-0 top-2 bottom-2 w-1 rounded-r"
+                    style={{ backgroundColor: c.hex }}
+                    aria-hidden="true"
+                  />
+
                   {/* Time */}
                   <div className="w-14 shrink-0 text-center">
                     <span className="block text-sm font-semibold tabular-nums">
@@ -69,7 +94,10 @@ export function UpcomingAppointments({ appointments }: { appointments: Appointme
 
                   {/* Avatar + name */}
                   <div className="flex flex-1 items-center gap-2.5 min-w-0">
-                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary">
+                    <div
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold"
+                      style={{ backgroundColor: c.soft, color: c.textOnSoft }}
+                    >
                       {getInitials(apt.client_name)}
                     </div>
                     <p className="truncate text-sm font-medium">{apt.client_name}</p>

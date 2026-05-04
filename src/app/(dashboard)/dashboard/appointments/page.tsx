@@ -5,6 +5,7 @@ import { format, parseISO, startOfMonth, endOfMonth } from 'date-fns'
 import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { AppointmentsClient, type ActiveFilter, type AptStatusKey } from './appointments-client'
+import { autoCompletePastAppointments } from './actions'
 
 export const metadata: Metadata = { title: 'Appointments' }
 
@@ -94,6 +95,11 @@ export default async function AppointmentsPage({
     )
   }
 
+  // Catch up on appointments that have ended without being marked manually.
+  // Runs before the data fetch so the calendar shows the corrected statuses
+  // on this very render — no second round-trip needed.
+  await autoCompletePastAppointments(clinic.id)
+
   // Server-side query with the filter applied. Range is bounded by the date
   // window; status is only narrowed when the user chose a subset (otherwise we
   // skip the `.in()` so the query planner can stay on the (clinic_id, starts_at)
@@ -114,6 +120,7 @@ export default async function AppointmentsPage({
     { data: rawAppointments },
     { data: services },
     { data: staffList },
+    { data: clientsList },
   ] = await Promise.all([
     aptQuery,
     admin
@@ -125,6 +132,14 @@ export default async function AppointmentsPage({
     admin
       .from('staff')
       .select('*')
+      .eq('clinic_id', clinic.id)
+      .order('name'),
+    // Pre-load every client so the appointment-form combobox can offer the
+    // full list instantly on focus, and fall back to remote search only when
+    // the typed query goes outside the cached set.
+    admin
+      .from('clients')
+      .select('id, name, email, phone')
       .eq('clinic_id', clinic.id)
       .order('name'),
   ])
@@ -144,6 +159,7 @@ export default async function AppointmentsPage({
       appointments={appointments}
       services={services ?? []}
       staffList={staffList ?? []}
+      clients={clientsList ?? []}
       filter={filter}
     />
   )

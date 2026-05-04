@@ -6,6 +6,16 @@ import { getAuthorizedClinic } from '@/lib/get-clinic'
 
 type Result = { error?: string; success?: boolean }
 
+// Accept the 7-char hex (`#RRGGBB`) the picker submits; reject anything else
+// rather than persisting bogus CSS. Empty/null clears the override so the
+// fallback palette resolver in `lib/service-colors` takes over again.
+function parseColor(raw: FormDataEntryValue | null): string | null {
+  if (typeof raw !== 'string') return null
+  const v = raw.trim()
+  if (!v) return null
+  return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toUpperCase() : null
+}
+
 export async function createService(formData: FormData): Promise<Result> {
   const auth = await getAuthorizedClinic()
   if ('error' in auth) return { error: auth.error }
@@ -29,6 +39,7 @@ export async function createService(formData: FormData): Promise<Result> {
     price,
     currency: 'MAD',
     category: (formData.get('category') as string | null) || null,
+    color: parseColor(formData.get('color')),
     is_active: formData.get('is_active') === 'on',
   })
 
@@ -61,6 +72,7 @@ export async function updateService(id: string, formData: FormData): Promise<Res
       duration_minutes: duration,
       price,
       category: (formData.get('category') as string | null) || null,
+      color: parseColor(formData.get('color')),
       is_active: formData.get('is_active') === 'on',
     })
     .eq('id', id)

@@ -18,7 +18,9 @@
       "Bash(curl *)",
       "PowerShell(taskkill *)",
       "Bash(mkdir -p 'src/app/admin/\\(gated\\)')",
-      "Bash(mv src/app/admin/actions.ts src/app/admin/admin-client.tsx src/app/admin/layout.tsx src/app/admin/page.tsx src/app/admin/seed-actions.ts 'src/app/admin/\\(gated\\)/')"
+      "Bash(mv src/app/admin/actions.ts src/app/admin/admin-client.tsx src/app/admin/layout.tsx src/app/admin/page.tsx src/app/admin/seed-actions.ts 'src/app/admin/\\(gated\\)/')",
+      "Bash(git -C \"C:\\\\Users\\\\DELL\\\\beauty-saas\" diff HEAD -- \"src/app/\\(dashboard\\)/dashboard/appointments/appointments-client.tsx\")",
+      "Bash(git -C \"C:\\\\Users\\\\DELL\\\\beauty-saas\" show HEAD:\"src/app/\\(dashboard\\)/dashboard/appointments/appointments-client.tsx\")"
     ]
   }
 }

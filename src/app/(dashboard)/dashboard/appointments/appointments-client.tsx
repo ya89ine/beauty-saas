@@ -40,15 +40,22 @@ import { CSS } from '@dnd-kit/utilities'
 import {
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Plus,
   Calendar,
   Clock,
   Users,
+  Search,
+  Mail,
+  Phone,
+  X,
+  UserPlus,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Service, Staff } from '@/types/database'
 import { createAppointment, updateAppointment, deleteAppointment, searchClients, type ClientSummary } from './actions'
 import { APPOINTMENT_DURATIONS } from './constants'
+import { getServiceColor, getServiceHex, type ServiceColor } from '@/lib/service-colors'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -102,8 +109,20 @@ type ViewMode = 'schedule' | 'week' | 'month'
 const DAY_START = 7
 const DAY_END = 21
 const HOUR_HEIGHT = 64   // px per hour → 1px per minute at 64/60
-const SNAP_MIN = 15       // snap drag to 15-minute increments
+const SLOT_MIN = 15       // calendar slot granularity (also drag snap)
+const SNAP_MIN = SLOT_MIN
+const SLOT_HEIGHT = HOUR_HEIGHT / (60 / SLOT_MIN)  // 16px per 15-min slot
 const HOURS = Array.from({ length: DAY_END - DAY_START }, (_, i) => DAY_START + i)
+// Quarter-hour offsets (in hours) used to draw the lighter grid lines and to
+// mount slot click targets for :15/:30/:45.
+const QUARTERS: ReadonlyArray<number> = [0, 0.25, 0.5, 0.75]
+
+// Round a Date down to the nearest 15-minute mark.
+function snapToSlot(d: Date): Date {
+  const out = new Date(d)
+  out.setMinutes(Math.floor(out.getMinutes() / SLOT_MIN) * SLOT_MIN, 0, 0)
+  return out
+}
 
 const STATUS_CFG: Record<
   AptStatus,
@@ -159,11 +178,20 @@ function HourLines() {
   return (
     <>
       {HOURS.map((h) => (
-        <div
-          key={h}
-          className="absolute left-0 right-0 border-t border-border/40 pointer-events-none"
-          style={{ top: (h - DAY_START) * HOUR_HEIGHT }}
-        />
+        <div key={`h-${h}`}>
+          <div
+            className="absolute left-0 right-0 border-t border-border/50 pointer-events-none"
+            style={{ top: (h - DAY_START) * HOUR_HEIGHT }}
+          />
+          {/* Lighter quarter-hour lines (skip the on-the-hour line — already drawn) */}
+          {QUARTERS.slice(1).map((q) => (
+            <div
+              key={`q-${h}-${q}`}
+              className="absolute left-0 right-0 border-t border-dashed border-border/25 pointer-events-none"
+              style={{ top: (h - DAY_START + q) * HOUR_HEIGHT }}
+            />
+          ))}
+        </div>
       ))}
     </>
   )
@@ -198,9 +226,11 @@ function CurrentTimeLine() {
 
 function DraggableApt({
   lo,
+  color,
   onOpen,
 }: {
   lo: LaidOut
+  color: ServiceColor
   onOpen: (a: AppointmentRow) => void
 }) {
   const { apt, lane, totalLanes } = lo
@@ -212,6 +242,7 @@ function DraggableApt({
   const top = aptTopPx(apt.starts_at)
   const height = aptHeightPx(apt.starts_at, apt.ends_at)
   const pct = 100 / totalLanes
+  const cancelled = apt.status === 'cancelled'
 
   return (
     <div
@@ -224,19 +255,23 @@ function DraggableApt({
         width: `${pct - 2}%`,
         zIndex: isDragging ? 50 : 10,
         touchAction: 'none',
+        backgroundColor: cancelled ? undefined : color.soft,
+        borderColor: cancelled ? undefined : color.border,
+        color: cancelled ? undefined : color.textOnSoft,
+        borderLeftWidth: 4,
       }}
       className={`absolute rounded border px-2 py-1.5 text-xs overflow-hidden
         cursor-grab active:cursor-grabbing select-none transition-opacity
         ${isDragging ? 'opacity-30' : 'hover:brightness-95'}
-        ${cfg.bg} ${cfg.text} ${cfg.border}`}
+        ${cancelled ? `${cfg.bg} ${cfg.text} ${cfg.border} line-through opacity-70` : ''}`}
       onClick={(e) => { e.stopPropagation(); if (!isDragging) onOpen(apt) }}
       {...attributes}
       {...listeners}
     >
       <p className="font-bold truncate leading-tight">{apt.client_name}</p>
-      {height >= 38 && <p className="truncate leading-tight mt-0.5" style={{ opacity: 0.75 }}>{apt.service?.name ?? ''}</p>}
+      {height >= 38 && <p className="truncate leading-tight mt-0.5" style={{ opacity: 0.85 }}>{apt.service?.name ?? ''}</p>}
       {height >= 54 && (
-        <p className="truncate leading-tight tabular-nums mt-0.5 text-[10px]" style={{ opacity: 0.65 }}>
+        <p className="truncate leading-tight tabular-nums mt-0.5 text-[10px]" style={{ opacity: 0.7 }}>
           {format(parseISO(apt.starts_at), 'HH:mm')} – {format(parseISO(apt.ends_at), 'HH:mm')}
         </p>
       )}
@@ -246,18 +281,26 @@ function DraggableApt({
 
 // ─── Drag overlay (floating copy while dragging) ──────────────────────────────
 
-function AptOverlay({ apt }: { apt: AppointmentRow }) {
+function AptOverlay({ apt, color }: { apt: AppointmentRow; color: ServiceColor }) {
   const cfg = STATUS_CFG[apt.status]
   const height = aptHeightPx(apt.starts_at, apt.ends_at)
+  const cancelled = apt.status === 'cancelled'
   return (
     <div
-      style={{ height, width: 160 }}
+      style={{
+        height,
+        width: 160,
+        backgroundColor: cancelled ? undefined : color.soft,
+        borderColor: cancelled ? undefined : color.border,
+        color: cancelled ? undefined : color.textOnSoft,
+        borderLeftWidth: 4,
+      }}
       className={`rounded border px-2 py-1.5 text-xs overflow-hidden shadow-2xl ring-2 ring-primary/30
-        ${cfg.bg} ${cfg.text} ${cfg.border}`}
+        ${cancelled ? `${cfg.bg} ${cfg.text} ${cfg.border}` : ''}`}
     >
       <p className="font-bold truncate leading-tight">{apt.client_name}</p>
-      <p className="truncate leading-tight mt-0.5" style={{ opacity: 0.75 }}>{apt.service?.name ?? ''}</p>
-      <p className="truncate leading-tight tabular-nums mt-0.5 text-[10px]" style={{ opacity: 0.65 }}>
+      <p className="truncate leading-tight mt-0.5" style={{ opacity: 0.85 }}>{apt.service?.name ?? ''}</p>
+      <p className="truncate leading-tight tabular-nums mt-0.5 text-[10px]" style={{ opacity: 0.7 }}>
         {format(parseISO(apt.starts_at), 'HH:mm')} – {format(parseISO(apt.ends_at), 'HH:mm')}
       </p>
     </div>
@@ -271,6 +314,7 @@ function StaffColumn({
   label,
   date,
   colApts,
+  colorFor,
   onClickSlot,
   onClickApt,
 }: {
@@ -278,6 +322,7 @@ function StaffColumn({
   label: string
   date: Date
   colApts: AppointmentRow[]
+  colorFor: (serviceId: string) => ServiceColor
   onClickSlot: (date: Date) => void
   onClickApt: (apt: AppointmentRow) => void
 }) {
@@ -285,9 +330,9 @@ function StaffColumn({
   const { setNodeRef, isOver } = useDroppable({ id, data: { staffId } })
   const laidOut = useMemo(() => computeLayout(colApts), [colApts])
 
-  function slotDate(hour: number): Date {
+  function slotDate(hour: number, minute: number): Date {
     const d = new Date(date)
-    d.setHours(hour, 0, 0, 0)
+    d.setHours(hour, minute, 0, 0)
     return d
   }
 
@@ -308,26 +353,31 @@ function StaffColumn({
       >
         <HourLines />
 
-        {/* Per-hour slot targets with hover "+" */}
-        {HOURS.map((h) => (
-          <div
-            key={h}
-            className="absolute left-0 right-0 z-[1] group/slot flex items-center justify-center"
-            style={{ top: (h - DAY_START) * HOUR_HEIGHT, height: HOUR_HEIGHT }}
-            onClick={() => onClickSlot(slotDate(h))}
-          >
-            <span className="pointer-events-none flex h-5 w-5 items-center justify-center rounded-full
-              bg-primary/0 text-primary opacity-0 transition-opacity
-              group-hover/slot:opacity-100 group-hover/slot:bg-primary/10">
-              <Plus className="h-3 w-3" />
-            </span>
-          </div>
-        ))}
+        {/* Per-15-min slot targets with hover "+" */}
+        {HOURS.flatMap((h) =>
+          QUARTERS.map((q) => {
+            const minute = Math.round(q * 60)
+            return (
+              <div
+                key={`${h}-${minute}`}
+                className="absolute left-0 right-0 z-[1] group/slot flex items-center justify-center"
+                style={{ top: (h - DAY_START + q) * HOUR_HEIGHT, height: SLOT_HEIGHT }}
+                onClick={() => onClickSlot(slotDate(h, minute))}
+              >
+                <span className="pointer-events-none flex h-4 w-4 items-center justify-center rounded-full
+                  bg-primary/0 text-primary opacity-0 transition-opacity
+                  group-hover/slot:opacity-100 group-hover/slot:bg-primary/10">
+                  <Plus className="h-2.5 w-2.5" />
+                </span>
+              </div>
+            )
+          }),
+        )}
 
         <CurrentTimeLine />
 
         {laidOut.map((lo) => (
-          <DraggableApt key={lo.apt.id} lo={lo} onOpen={onClickApt} />
+          <DraggableApt key={lo.apt.id} lo={lo} color={colorFor(lo.apt.service_id)} onOpen={onClickApt} />
         ))}
       </div>
     </div>
@@ -340,12 +390,14 @@ function SchedulerView({
   date,
   appointments,
   staffList,
+  colorFor,
   onClickApt,
   onClickSlot,
 }: {
   date: Date
   appointments: AppointmentRow[]
   staffList: Staff[]
+  colorFor: (serviceId: string) => ServiceColor
   onClickApt: (apt: AppointmentRow) => void
   onClickSlot: (opts: { time: Date; staffId: string | null }) => void
 }) {
@@ -474,6 +526,7 @@ function SchedulerView({
               colApts={displayApts.filter((a) =>
                 col.id === null ? a.staff_id === null : a.staff_id === col.id,
               )}
+              colorFor={colorFor}
               onClickSlot={(time) => onClickSlot({ time, staffId: col.id })}
               onClickApt={onClickApt}
             />
@@ -482,7 +535,7 @@ function SchedulerView({
       </div>
 
       <DragOverlay dropAnimation={null}>
-        {activeApt ? <AptOverlay apt={activeApt} /> : null}
+        {activeApt ? <AptOverlay apt={activeApt} color={colorFor(activeApt.service_id)} /> : null}
       </DragOverlay>
     </DndContext>
   )
@@ -493,11 +546,13 @@ function SchedulerView({
 function WeekView({
   date,
   appointments,
+  colorFor,
   onClickApt,
   onClickSlot,
 }: {
   date: Date
   appointments: AppointmentRow[]
+  colorFor: (serviceId: string) => ServiceColor
   onClickApt: (a: AppointmentRow) => void
   onClickSlot: (d: Date) => void
 }) {
@@ -507,8 +562,12 @@ function WeekView({
   function handleColClick(day: Date, e: React.MouseEvent<HTMLDivElement>) {
     if ((e.target as HTMLElement).closest('[data-apt]')) return
     const rect = e.currentTarget.getBoundingClientRect()
-    const hour = Math.floor((e.clientY - rect.top) / HOUR_HEIGHT) + DAY_START
-    const d = new Date(day); d.setHours(Math.min(hour, DAY_END - 1), 0, 0, 0)
+    // Snap click position to the nearest 15-minute slot.
+    const minutesFromDayStart = Math.floor((e.clientY - rect.top) / SLOT_HEIGHT) * SLOT_MIN
+    const totalMinutes = DAY_START * 60 + minutesFromDayStart
+    const hour = Math.min(Math.floor(totalMinutes / 60), DAY_END - 1)
+    const minute = totalMinutes % 60
+    const d = new Date(day); d.setHours(hour, minute, 0, 0)
     onClickSlot(d)
   }
 
@@ -550,11 +609,24 @@ function WeekView({
                 const { apt, lane, totalLanes } = lo
                 const cfg = STATUS_CFG[apt.status]
                 const pct = 100 / totalLanes
+                const cancelled = apt.status === 'cancelled'
+                const c = colorFor(apt.service_id)
                 return (
                   <button key={apt.id} data-apt
                     onClick={(e) => { e.stopPropagation(); onClickApt(apt) }}
-                    style={{ top: aptTopPx(apt.starts_at), height: aptHeightPx(apt.starts_at, apt.ends_at), left: `${lane * pct + 1}%`, width: `${pct - 2}%` }}
-                    className={`absolute rounded border px-1 py-0.5 text-left text-[10px] overflow-hidden z-10 hover:brightness-95 ${cfg.bg} ${cfg.text} ${cfg.border}`}
+                    style={{
+                      top: aptTopPx(apt.starts_at),
+                      height: aptHeightPx(apt.starts_at, apt.ends_at),
+                      left: `${lane * pct + 1}%`,
+                      width: `${pct - 2}%`,
+                      backgroundColor: cancelled ? undefined : c.soft,
+                      borderColor: cancelled ? undefined : c.border,
+                      color: cancelled ? undefined : c.textOnSoft,
+                      borderLeftWidth: 3,
+                    }}
+                    className={`absolute rounded border px-1 py-0.5 text-left text-[10px] overflow-hidden z-10 hover:brightness-95 ${
+                      cancelled ? `${cfg.bg} ${cfg.text} ${cfg.border} line-through opacity-70` : ''
+                    }`}
                   >
                     <p className="font-semibold truncate leading-tight">{apt.client_name}</p>
                   </button>
@@ -573,11 +645,13 @@ function WeekView({
 function MonthView({
   date,
   appointments,
+  colorFor,
   onClickApt,
   onClickDay,
 }: {
   date: Date
   appointments: AppointmentRow[]
+  colorFor: (serviceId: string) => ServiceColor
   onClickApt: (a: AppointmentRow) => void
   onClickDay: (d: Date) => void
 }) {
@@ -609,9 +683,19 @@ function MonthView({
               <div className="flex flex-col gap-0.5">
                 {dayApts.slice(0, 3).map((apt) => {
                   const cfg = STATUS_CFG[apt.status]
+                  const cancelled = apt.status === 'cancelled'
+                  const c = colorFor(apt.service_id)
                   return (
                     <button key={apt.id} onClick={(e) => { e.stopPropagation(); onClickApt(apt) }}
-                      className={`w-full rounded px-1 py-0.5 text-left text-[10px] leading-tight truncate border ${cfg.bg} ${cfg.text} ${cfg.border}`}
+                      style={{
+                        backgroundColor: cancelled ? undefined : c.soft,
+                        borderColor: cancelled ? undefined : c.border,
+                        color: cancelled ? undefined : c.textOnSoft,
+                        borderLeftWidth: 3,
+                      }}
+                      className={`w-full rounded px-1 py-0.5 text-left text-[10px] leading-tight truncate border ${
+                        cancelled ? `${cfg.bg} ${cfg.text} ${cfg.border} line-through opacity-70` : ''
+                      }`}
                     >
                       <span className="font-semibold">{format(parseISO(apt.starts_at), 'HH:mm')}</span>{' '}{apt.client_name}
                     </button>
@@ -692,11 +776,13 @@ function TodaySummary({
 
 function AptDetail({
   apt,
+  color,
   onEdit,
   onDelete,
   onClose,
 }: {
   apt: AppointmentRow
+  color: ServiceColor
   onEdit: () => void
   onDelete: () => void
   onClose: () => void
@@ -705,6 +791,11 @@ function AptDetail({
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose() }}>
       <DialogContent className="sm:max-w-sm">
+        <div
+          className="h-1 rounded-full"
+          style={{ backgroundColor: color.hex }}
+          aria-hidden="true"
+        />
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {apt.client_name}
@@ -733,7 +824,15 @@ function AptDetail({
             {' – '}
             {format(parseISO(apt.ends_at), 'HH:mm')}
           </div>
-          {apt.service && <p><span className="text-muted-foreground">Service:</span> {apt.service.name} ({apt.service.duration_minutes} min)</p>}
+          {apt.service && (
+            <p className="flex items-center gap-2">
+              <span
+                className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-foreground/10"
+                style={{ backgroundColor: color.hex }}
+              />
+              <span><span className="text-muted-foreground">Service:</span> {apt.service.name} ({apt.service.duration_minutes} min)</span>
+            </p>
+          )}
           {apt.staff  && <p><span className="text-muted-foreground">Staff:</span> {apt.staff.name}</p>}
           {apt.client_phone && <p><span className="text-muted-foreground">Phone:</span> {apt.client_phone}</p>}
           {apt.notes  && <p><span className="text-muted-foreground">Notes:</span> {apt.notes}</p>}
@@ -751,9 +850,34 @@ function AptDetail({
 
 // ─── Smart client selector (search + create) ─────────────────────────────────
 
+// Highlight every case-insensitive occurrence of `query` inside `text`. Returns
+// React fragments so the matched substring can be wrapped in a <mark>. Empty
+// query → render text as-is.
+function highlightMatch(text: string, query: string): React.ReactNode {
+  if (!query) return text
+  const lower = text.toLowerCase()
+  const q = query.toLowerCase()
+  const out: React.ReactNode[] = []
+  let i = 0
+  let key = 0
+  while (i < text.length) {
+    const idx = lower.indexOf(q, i)
+    if (idx === -1) { out.push(text.slice(i)); break }
+    if (idx > i) out.push(text.slice(i, idx))
+    out.push(
+      <mark key={key++} className="rounded bg-amber-200/70 px-0.5 text-foreground">
+        {text.slice(idx, idx + q.length)}
+      </mark>,
+    )
+    i = idx + q.length
+  }
+  return <>{out}</>
+}
+
 function ClientSelector({
   selectedId,
   name,
+  clients,
   onChange,
   onSelect,
   onClear,
@@ -762,33 +886,70 @@ function ClientSelector({
 }: {
   selectedId: string | null
   name: string
+  clients: ClientSummary[]
   onChange: (name: string) => void
   onSelect: (client: ClientSummary) => void
   onClear: () => void
   onCreateNew: () => void
   inputRef?: React.RefObject<HTMLInputElement | null>
 }) {
-  const [results, setResults] = useState<ClientSummary[]>([])
+  const [remoteResults, setRemoteResults] = useState<ClientSummary[]>([])
   const [open, setOpen] = useState(false)
   const [searching, setSearching] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const listRef = useRef<HTMLUListElement | null>(null)
   const queryRef = useRef(name)
   queryRef.current = name
 
-  // Debounced server-side search.
+  // Local filter on the pre-loaded clinic clients — instant, no round-trip.
+  // The remote `searchClients` call below is a backstop in case the typed
+  // query touches a client that isn't in the cached list (e.g. a row added by
+  // another device since this page was rendered).
+  const trimmed = name.trim()
+  const lower = trimmed.toLowerCase()
+  const localMatches = useMemo<ClientSummary[]>(() => {
+    if (selectedId) return []
+    if (!trimmed) return clients.slice(0, 50)
+    return clients
+      .filter((c) =>
+        c.name.toLowerCase().includes(lower) ||
+        (c.email?.toLowerCase().includes(lower) ?? false) ||
+        (c.phone?.includes(trimmed) ?? false),
+      )
+      .slice(0, 50)
+  }, [clients, lower, trimmed, selectedId])
+
+  // Merge local + remote, dedup by id, local first (cheaper / freshest).
+  const results = useMemo<ClientSummary[]>(() => {
+    if (selectedId) return []
+    const seen = new Set<string>()
+    const out: ClientSummary[] = []
+    for (const c of localMatches) {
+      if (!seen.has(c.id)) { seen.add(c.id); out.push(c) }
+    }
+    for (const c of remoteResults) {
+      if (!seen.has(c.id)) { seen.add(c.id); out.push(c) }
+    }
+    return out
+  }, [localMatches, remoteResults, selectedId])
+
+  // Debounced server-side search — only when we have a query the local list
+  // doesn't already satisfy. Empty queries just show the cached list.
   useEffect(() => {
     if (selectedId) return
     const q = name.trim()
-    if (q.length < 1) { setResults([]); setSearching(false); return }
+    if (q.length < 1) { setRemoteResults([]); setSearching(false); return }
+    if (localMatches.length >= 8) { setRemoteResults([]); setSearching(false); return }
     setSearching(true)
     const t = setTimeout(async () => {
       const r = await searchClients(q)
       if (queryRef.current.trim() !== q) return
-      setResults(r.clients ?? [])
+      setRemoteResults(r.clients ?? [])
       setSearching(false)
     }, 200)
     return () => { clearTimeout(t) }
-  }, [name, selectedId])
+  }, [name, selectedId, localMatches.length])
 
   // Close dropdown on outside click.
   useEffect(() => {
@@ -800,28 +961,92 @@ function ClientSelector({
     return () => document.removeEventListener('mousedown', onDown)
   }, [open])
 
-  const trimmed = name.trim()
-  const exactMatch = results.some((c) => c.name.toLowerCase() === trimmed.toLowerCase())
+  const exactMatch = results.some((c) => c.name.toLowerCase() === lower)
   const showCreate = !selectedId && trimmed.length > 0 && !exactMatch
+  // Total selectable rows = client matches + an optional "create new" row that
+  // sits at the end. Keyboard nav indexes into this combined list.
+  const totalRows = results.length + (showCreate ? 1 : 0)
+
+  // Keep the active index in range when results change (typing narrows the list).
+  useEffect(() => {
+    setActiveIndex((i) => (totalRows === 0 ? 0 : Math.min(i, totalRows - 1)))
+  }, [totalRows])
+
+  // Auto-scroll the active row into view so keyboard navigation never goes
+  // off-screen in the dropdown.
+  useEffect(() => {
+    if (!open) return
+    const ul = listRef.current
+    if (!ul) return
+    const node = ul.querySelector<HTMLElement>(`[data-row-index="${activeIndex}"]`)
+    if (node) node.scrollIntoView({ block: 'nearest' })
+  }, [activeIndex, open])
+
+  function commitActive() {
+    if (totalRows === 0) return
+    if (activeIndex < results.length) {
+      onSelect(results[activeIndex])
+    } else {
+      onCreateNew()
+    }
+    setOpen(false)
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (selectedId) return
+    if (e.key === 'ArrowDown') {
+      if (!open) { setOpen(true); return }
+      if (totalRows === 0) return
+      e.preventDefault()
+      setActiveIndex((i) => (i + 1) % totalRows)
+    } else if (e.key === 'ArrowUp') {
+      if (!open || totalRows === 0) return
+      e.preventDefault()
+      setActiveIndex((i) => (i - 1 + totalRows) % totalRows)
+    } else if (e.key === 'Enter') {
+      if (open && totalRows > 0) {
+        e.preventDefault()
+        commitActive()
+      }
+    } else if (e.key === 'Escape') {
+      if (open) { e.preventDefault(); setOpen(false) }
+    } else if (e.key === 'Home') {
+      if (open && totalRows > 0) { e.preventDefault(); setActiveIndex(0) }
+    } else if (e.key === 'End') {
+      if (open && totalRows > 0) { e.preventDefault(); setActiveIndex(totalRows - 1) }
+    }
+  }
 
   return (
     <div ref={containerRef} className="relative">
       <div className="relative flex items-center">
+        <Search className="pointer-events-none absolute left-2.5 h-3.5 w-3.5 text-muted-foreground" />
         <Input
           ref={inputRef ?? undefined}
           value={name}
           onChange={(e) => {
             if (selectedId) onClear()
             onChange(e.target.value)
+            setActiveIndex(0)
             setOpen(true)
           }}
           onFocus={() => { if (!selectedId) setOpen(true) }}
+          onKeyDown={handleKeyDown}
           placeholder="Search by name, email, or phone…"
           required
-          className="pr-8"
+          className="pl-8 pr-8"
           autoComplete="off"
+          role="combobox"
+          aria-expanded={open}
+          aria-autocomplete="list"
+          aria-controls="client-selector-listbox"
+          aria-activedescendant={
+            open && activeIndex < results.length
+              ? `client-opt-${results[activeIndex].id}`
+              : undefined
+          }
         />
-        {selectedId && (
+        {selectedId ? (
           <button
             type="button"
             onClick={() => { onClear(); setOpen(true); inputRef?.current?.focus() }}
@@ -829,8 +1054,12 @@ function ClientSelector({
             aria-label="Unlink client"
             title="Unlink client"
           >
-            ×
+            <X className="h-3.5 w-3.5" />
           </button>
+        ) : (
+          <ChevronDown
+            className={`pointer-events-none absolute right-2.5 h-3.5 w-3.5 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`}
+          />
         )}
       </div>
 
@@ -839,48 +1068,143 @@ function ClientSelector({
           ? '✓ Linked to existing client'
           : searching
           ? 'Searching…'
-          : 'Pick an existing client or create a new one.'}
+          : trimmed
+          ? `${results.length} match${results.length === 1 ? '' : 'es'} — ↑↓ to navigate, ↵ to select`
+          : `${clients.length} client${clients.length === 1 ? '' : 's'} on file — type to filter or pick one.`}
       </p>
 
       {open && !selectedId && (results.length > 0 || showCreate) && (
         <div className="absolute z-50 mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-lg ring-1 ring-foreground/10">
           {results.length > 0 && (
-            <ul className="max-h-56 overflow-y-auto py-1" role="listbox">
-              {results.map((c) => (
-                <li key={c.id}>
-                  <button
-                    type="button"
-                    onClick={() => { onSelect(c); setOpen(false) }}
-                    className="flex w-full items-start gap-2 px-3 py-2 text-left text-sm hover:bg-muted transition-colors"
-                    role="option"
-                    aria-selected="false"
-                  >
-                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
-                      {c.name.charAt(0).toUpperCase()}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <p className="truncate font-medium leading-tight">{c.name}</p>
-                      <p className="truncate text-[11px] text-muted-foreground">
-                        {[c.email, c.phone].filter(Boolean).join(' · ') || '—'}
-                      </p>
-                    </span>
-                  </button>
-                </li>
-              ))}
+            <ul
+              ref={listRef}
+              id="client-selector-listbox"
+              className="max-h-64 overflow-y-auto py-1"
+              role="listbox"
+            >
+              {results.map((c, idx) => {
+                const active = idx === activeIndex
+                return (
+                  <li key={c.id}>
+                    <button
+                      type="button"
+                      id={`client-opt-${c.id}`}
+                      data-row-index={idx}
+                      onMouseEnter={() => setActiveIndex(idx)}
+                      onClick={() => { onSelect(c); setOpen(false) }}
+                      className={`flex w-full items-start gap-2.5 px-3 py-2 text-left text-sm transition-colors ${
+                        active ? 'bg-primary/10 text-foreground' : 'hover:bg-muted'
+                      }`}
+                      role="option"
+                      aria-selected={active}
+                    >
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
+                        {c.name.charAt(0).toUpperCase()}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <p className="truncate font-medium leading-tight">
+                          {highlightMatch(c.name, trimmed)}
+                        </p>
+                        <p className="truncate text-[11px] text-muted-foreground flex items-center gap-2">
+                          {c.email && (
+                            <span className="inline-flex items-center gap-1 truncate">
+                              <Mail className="h-3 w-3 shrink-0" />
+                              <span className="truncate">{highlightMatch(c.email, trimmed)}</span>
+                            </span>
+                          )}
+                          {c.phone && (
+                            <span className="inline-flex items-center gap-1 truncate">
+                              <Phone className="h-3 w-3 shrink-0" />
+                              <span className="truncate tabular-nums">{highlightMatch(c.phone, trimmed)}</span>
+                            </span>
+                          )}
+                          {!c.email && !c.phone && <span>No contact info</span>}
+                        </p>
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           )}
           {showCreate && (
             <button
               type="button"
+              data-row-index={results.length}
+              onMouseEnter={() => setActiveIndex(results.length)}
               onClick={() => { onCreateNew(); setOpen(false) }}
-              className="flex w-full items-center gap-2 border-t bg-muted/40 px-3 py-2 text-left text-xs font-semibold text-foreground hover:bg-muted transition-colors"
+              className={`flex w-full items-center gap-2 border-t px-3 py-2 text-left text-xs font-semibold text-foreground transition-colors ${
+                activeIndex === results.length ? 'bg-primary/10' : 'bg-muted/40 hover:bg-muted'
+              }`}
             >
-              <Plus className="h-3.5 w-3.5" />
+              <UserPlus className="h-3.5 w-3.5" />
               Create new client &quot;{trimmed}&quot;
             </button>
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// Color-coded service picker. Renders a real <select name="service_id"> so it
+// participates in form submission unchanged, but overlays a styled trigger
+// that shows the selected service's color swatch. The native <select> sits
+// invisibly on top so the OS popup still works for keyboard/touch users.
+function ServiceSelect({
+  services,
+  defaultValue,
+}: {
+  services: Service[]
+  defaultValue: string
+}) {
+  const [value, setValue] = useState<string>(defaultValue)
+  const selected = services.find((s) => s.id === value) ?? null
+  const swatch = selected ? getServiceHex(selected) : null
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor="service_id">Service *</Label>
+      <div className="relative">
+        {/* Visual trigger: shows color swatch for the current value. */}
+        <div
+          className="pointer-events-none flex h-8 w-full items-center gap-2 rounded-lg border border-input bg-transparent px-2.5 text-sm"
+          aria-hidden="true"
+        >
+          {swatch && (
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-foreground/10"
+              style={{ backgroundColor: swatch }}
+            />
+          )}
+          <span className={`truncate ${selected ? '' : 'text-muted-foreground'}`}>
+            {selected ? `${selected.name} (${selected.duration_minutes} min)` : 'Select service'}
+          </span>
+          <span className="ml-auto text-muted-foreground">▾</span>
+        </div>
+        <select
+          id="service_id"
+          name="service_id"
+          required
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+        >
+          <option value="" disabled>Select service</option>
+          {services.map((s) => {
+            const hex = getServiceHex(s)
+            return (
+              <option
+                key={s.id}
+                value={s.id}
+                style={{ backgroundColor: `${hex}22`, color: 'inherit' }}
+              >
+                ● {s.name} ({s.duration_minutes} min)
+              </option>
+            )
+          })}
+        </select>
+      </div>
     </div>
   )
 }
@@ -893,6 +1217,7 @@ function AptFormDialog({
   defaultStaffId,
   services,
   staffList,
+  clients,
   onSaved,
 }: {
   open: boolean
@@ -902,6 +1227,7 @@ function AptFormDialog({
   defaultStaffId: string | null
   services: Service[]
   staffList: Staff[]
+  clients: ClientSummary[]
   onSaved: () => void
 }) {
   const [formError, setFormError] = useState<string | null>(null)
@@ -931,7 +1257,7 @@ function AptFormDialog({
     return 60
   })()
   const [startsAt, setStartsAt] = useState<string>(
-    editing ? toDatetimeLocal(parseISO(editing.starts_at)) : defaultStartsAt,
+    editing ? toDatetimeLocal(snapToSlot(parseISO(editing.starts_at))) : defaultStartsAt,
   )
   const [duration, setDuration] = useState<number>(initialDuration)
 
@@ -942,7 +1268,7 @@ function AptFormDialog({
     setClientName(editing?.client_name ?? '')
     setClientEmail(editing?.client_email ?? '')
     setClientPhone(editing?.client_phone ?? '')
-    setStartsAt(editing ? toDatetimeLocal(parseISO(editing.starts_at)) : defaultStartsAt)
+    setStartsAt(editing ? toDatetimeLocal(snapToSlot(parseISO(editing.starts_at))) : defaultStartsAt)
     if (editing) {
       const m = differenceInMinutes(parseISO(editing.ends_at), parseISO(editing.starts_at))
       const snapped = APPOINTMENT_DURATIONS.reduce(
@@ -976,7 +1302,12 @@ function AptFormDialog({
     fd.set('client_name', clientName.trim())
     fd.set('client_email', clientEmail.trim())
     fd.set('client_phone', clientPhone.trim())
-    fd.set('starts_at', startsAt)
+    // Browser support for `step` on datetime-local is uneven, so snap defensively.
+    const parsed = startsAt ? parseISO(startsAt) : null
+    const snappedStart = parsed && !isNaN(parsed.getTime())
+      ? toDatetimeLocal(snapToSlot(parsed))
+      : startsAt
+    fd.set('starts_at', snappedStart)
     fd.set('duration_minutes', String(duration))
     startTransition(async () => {
       const result = editing
@@ -1010,6 +1341,7 @@ function AptFormDialog({
             <ClientSelector
               selectedId={clientId}
               name={clientName}
+              clients={clients}
               inputRef={nameInputRef}
               onChange={setClientName}
               onSelect={(c) => {
@@ -1030,45 +1362,79 @@ function AptFormDialog({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="client_email">Email</Label>
-              <Input
-                ref={emailInputRef}
-                id="client_email"
-                type="email"
-                value={clientEmail}
-                onChange={(e) => setClientEmail(e.target.value)}
-                disabled={linked}
-                placeholder="sara@example.com"
-                title={linked ? 'Unlink the client to edit contact info' : undefined}
-              />
+          {linked ? (
+            // Polished CRM-style summary card for the resolved client. The
+            // server reads client_id and ignores email/phone, but we keep the
+            // values in state so unlinking restores them as editable inputs.
+            <div className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-2.5">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-700">
+                {(clientName.charAt(0) || '?').toUpperCase()}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold leading-tight text-emerald-900">
+                  {clientName || 'Linked client'}
+                </p>
+                <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-emerald-800/80">
+                  {clientEmail && (
+                    <span className="inline-flex items-center gap-1 truncate">
+                      <Mail className="h-3 w-3 shrink-0" />
+                      <span className="truncate">{clientEmail}</span>
+                    </span>
+                  )}
+                  {clientPhone && (
+                    <span className="inline-flex items-center gap-1 truncate">
+                      <Phone className="h-3 w-3 shrink-0" />
+                      <span className="truncate tabular-nums">{clientPhone}</span>
+                    </span>
+                  )}
+                  {!clientEmail && !clientPhone && <span className="italic">No contact info on file</span>}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setClientId(null)
+                  // Don't wipe the contact fields — the user may have wanted to
+                  // edit them; clearing the link reactivates the inputs below.
+                  // Refocus the search input so they can pick a different client.
+                  setTimeout(() => nameInputRef.current?.focus(), 0)
+                }}
+                className="shrink-0 rounded-md border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-50"
+              >
+                Change
+              </button>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="client_phone">Phone</Label>
-              <Input
-                id="client_phone"
-                type="tel"
-                value={clientPhone}
-                onChange={(e) => setClientPhone(e.target.value)}
-                disabled={linked}
-                placeholder="+212 6 00 00 00 00"
-                title={linked ? 'Unlink the client to edit contact info' : undefined}
-              />
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="client_email">Email</Label>
+                <Input
+                  ref={emailInputRef}
+                  id="client_email"
+                  type="email"
+                  value={clientEmail}
+                  onChange={(e) => setClientEmail(e.target.value)}
+                  placeholder="sara@example.com"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="client_phone">Phone</Label>
+                <Input
+                  id="client_phone"
+                  type="tel"
+                  value={clientPhone}
+                  onChange={(e) => setClientPhone(e.target.value)}
+                  placeholder="+212 6 00 00 00 00"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="service_id">Service *</Label>
-              <select id="service_id" name="service_id" required defaultValue={editing?.service_id ?? ''}
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer">
-                <option value="" disabled>Select service</option>
-                {services.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.duration_minutes} min)</option>
-                ))}
-              </select>
-            </div>
+            <ServiceSelect
+              services={services}
+              defaultValue={editing?.service_id ?? ''}
+            />
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="staff_id">Staff member</Label>
               <select id="staff_id" name="staff_id" defaultValue={effectiveStaffId}
@@ -1088,9 +1454,13 @@ function AptFormDialog({
                 id="starts_at"
                 type="datetime-local"
                 required
+                step={SLOT_MIN * 60}
                 value={startsAt}
                 onChange={(e) => setStartsAt(e.target.value)}
               />
+              <p className="text-[11px] text-muted-foreground">
+                Slots run every {SLOT_MIN} minutes (00, 15, 30, 45).
+              </p>
             </div>
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="duration_minutes">Duration *</Label>
@@ -1335,10 +1705,11 @@ interface Props {
   appointments: AppointmentRow[]
   services: Service[]
   staffList: Staff[]
+  clients: ClientSummary[]
   filter: ActiveFilter
 }
 
-export function AppointmentsClient({ appointments, services, staffList, filter }: Props) {
+export function AppointmentsClient({ appointments, services, staffList, clients, filter }: Props) {
   const router = useRouter()
   const [view, setView] = useState<ViewMode>('schedule')
   const [currentDate, setCurrentDate] = useState(() => new Date())
@@ -1348,6 +1719,17 @@ export function AppointmentsClient({ appointments, services, staffList, filter }
   const [defaultStartsAt, setDefaultStartsAt] = useState('')
   const [defaultStaffId, setDefaultStaffId] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+
+  // Stable color resolver: pre-computes from the active service list, then
+  // falls back to a deterministic hash on the service id for any appointment
+  // pointing at a service the list no longer contains (e.g. soft-deleted).
+  // The fallback path is pure — no caching needed, since `getServiceColor`
+  // hashes the same id to the same hex on every call.
+  const colorFor = useMemo<(serviceId: string) => ServiceColor>(() => {
+    const known = new Map<string, ServiceColor>()
+    for (const s of services) known.set(s.id, getServiceColor(s))
+    return (serviceId: string) => known.get(serviceId) ?? getServiceColor({ id: serviceId })
+  }, [services])
 
   function navigate(dir: -1 | 1) {
     setCurrentDate((d) => {
@@ -1359,7 +1741,8 @@ export function AppointmentsClient({ appointments, services, staffList, filter }
 
   function openCreate(opts?: { time?: Date; staffId?: string | null }) {
     setEditingApt(null)
-    setDefaultStartsAt(opts?.time ? toDatetimeLocal(opts.time) : toDatetimeLocal(new Date()))
+    const seed = opts?.time ?? new Date()
+    setDefaultStartsAt(toDatetimeLocal(snapToSlot(seed)))
     setDefaultStaffId(opts?.staffId ?? null)
     setFormOpen(true)
   }
@@ -1442,6 +1825,7 @@ export function AppointmentsClient({ appointments, services, staffList, filter }
             date={currentDate}
             appointments={appointments}
             staffList={staffList}
+            colorFor={colorFor}
             onClickApt={(apt) => setDetailApt(apt)}
             onClickSlot={({ time, staffId }) => openCreate({ time, staffId })}
           />
@@ -1450,6 +1834,7 @@ export function AppointmentsClient({ appointments, services, staffList, filter }
           <WeekView
             date={currentDate}
             appointments={appointments}
+            colorFor={colorFor}
             onClickApt={(apt) => setDetailApt(apt)}
             onClickSlot={(d) => openCreate({ time: d })}
           />
@@ -1458,6 +1843,7 @@ export function AppointmentsClient({ appointments, services, staffList, filter }
           <MonthView
             date={currentDate}
             appointments={appointments}
+            colorFor={colorFor}
             onClickApt={(apt) => setDetailApt(apt)}
             onClickDay={(d) => { setCurrentDate(d); setView('schedule') }}
           />
@@ -1467,6 +1853,7 @@ export function AppointmentsClient({ appointments, services, staffList, filter }
       {detailApt && (
         <AptDetail
           apt={detailApt}
+          color={colorFor(detailApt.service_id)}
           onEdit={() => openEdit(detailApt)}
           onDelete={() => handleDelete(detailApt)}
           onClose={() => setDetailApt(null)}
@@ -1481,6 +1868,7 @@ export function AppointmentsClient({ appointments, services, staffList, filter }
         defaultStaffId={defaultStaffId}
         services={services}
         staffList={staffList}
+        clients={clients}
         onSaved={() => router.refresh()}
       />
     </div>

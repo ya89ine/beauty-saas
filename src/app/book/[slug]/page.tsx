@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { Sparkles, MapPin, Phone, Mail } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { getServiceHex } from '@/lib/service-colors'
 
 export async function generateMetadata(props: PageProps<'/book/[slug]'>): Promise<Metadata> {
   const { slug } = await props.params
@@ -96,7 +97,7 @@ export default async function PublicBookingPage(props: PageProps<'/book/[slug]'>
                         <div className="flex items-center gap-4">
                           <div
                             className="h-10 w-1 shrink-0 rounded-full"
-                            style={{ backgroundColor: service.color ?? 'hsl(var(--primary))' }}
+                            style={{ backgroundColor: getServiceHex(service) }}
                           />
                           <div>
                             <p className="font-medium">{service.name}</p>

@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { StatsCards } from '@/components/dashboard/stats-cards'
 import { UpcomingAppointments } from '@/components/dashboard/upcoming-appointments'
+import { autoCompletePastAppointments } from './appointments/actions'
 
 export const metadata: Metadata = { title: 'Dashboard' }
 
@@ -42,6 +43,10 @@ export default async function DashboardPage() {
     )
   }
 
+  // Bring stale appointments up to date before the dashboard counts them, so
+  // "today's schedule" and revenue widgets reflect the just-finished sessions.
+  await autoCompletePastAppointments(clinic.id)
+
   const now = new Date()
   const startOfDay   = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const endOfDay     = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
@@ -62,6 +67,7 @@ export default async function DashboardPage() {
     { data: todayAppointments },
     { count: pendingCount },
     { data: revenueRaw },
+    { data: servicesForToday },
   ] = await Promise.all([
     admin
       .from('clients')
@@ -100,6 +106,11 @@ export default async function DashboardPage() {
       .gte('starts_at', startOfMonth.toISOString())
       .lte('starts_at', endOfMonth.toISOString())
       .in('status', ['pending', 'confirmed', 'completed']),
+    // Service rows referenced by today's appointments — for color stripes.
+    admin
+      .from('services')
+      .select('id, name, color, category')
+      .eq('clinic_id', clinic.id),
   ])
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -143,7 +154,10 @@ export default async function DashboardPage() {
         currency={currency}
       />
 
-      <UpcomingAppointments appointments={todayAppointments ?? []} />
+      <UpcomingAppointments
+        appointments={todayAppointments ?? []}
+        services={servicesForToday ?? []}
+      />
     </div>
   )
 }

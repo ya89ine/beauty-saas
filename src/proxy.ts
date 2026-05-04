@@ -24,6 +24,13 @@ import { adminGateInputs } from '@/lib/admin'
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
+  // Public webhook surface — must not require a Supabase session. The route
+  // itself enforces a shared-secret header (x-ghl-secret). Bypass here so we
+  // never touch auth cookies for these requests.
+  if (pathname.startsWith('/api/ghl')) {
+    return NextResponse.next()
+  }
+
   if (pathname.startsWith('/admin') && pathname !== '/admin/login') {
     const { response, user } = await updateSession(request)
     const gate = adminGateInputs(user?.email)
@@ -59,6 +66,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    '/((?!api/ghl|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
