@@ -12,7 +12,7 @@ export async function createPackage(formData: FormData): Promise<Result> {
   const { clinicId } = auth
 
   const clientId = (formData.get('client_id') as string) ?? ''
-  const serviceId = (formData.get('service_id') as string) || null
+  const serviceId = ((formData.get('service_id') as string) ?? '').trim()
   const packageName = ((formData.get('package_name') as string) ?? '').trim()
   const totalPrice = parseFloat(formData.get('total_price') as string) || 0
   const initialPayment = parseFloat(formData.get('initial_payment') as string) || 0
@@ -20,6 +20,7 @@ export async function createPackage(formData: FormData): Promise<Result> {
   const notes = (formData.get('notes') as string) || null
 
   if (!clientId) return { error: 'Client is required' }
+  if (!serviceId) return { error: 'Please select a service for this package' }
   if (!packageName) return { error: 'Package name is required' }
   if (totalSessions < 1) return { error: 'Sessions must be at least 1' }
 
@@ -33,6 +34,16 @@ export async function createPackage(formData: FormData): Promise<Result> {
     .eq('clinic_id', clinicId)
     .maybeSingle()
   if (!clientRow) return { error: 'Client not found' }
+
+  // Verify the service belongs to this clinic — appointments derive their
+  // service_id from this package, so the link must be authoritative.
+  const { data: svcRow } = await admin
+    .from('services')
+    .select('id')
+    .eq('id', serviceId)
+    .eq('clinic_id', clinicId)
+    .maybeSingle()
+  if (!svcRow) return { error: 'Service not found' }
 
   const { data: pkg, error } = await admin
     .from('treatment_packages')
@@ -72,17 +83,36 @@ export async function updatePackage(id: string, formData: FormData): Promise<Res
   if ('error' in auth) return { error: auth.error }
   const { clinicId } = auth
 
+  const serviceId = ((formData.get('service_id') as string) ?? '').trim()
   const packageName = ((formData.get('package_name') as string) ?? '').trim()
   const totalPrice = parseFloat(formData.get('total_price') as string) || 0
   const totalSessions = parseInt(formData.get('total_sessions') as string) || 1
   const notes = (formData.get('notes') as string) || null
 
+  if (!serviceId) return { error: 'Please select a service for this package' }
   if (!packageName) return { error: 'Package name is required' }
 
   const admin = createAdminClient()
+
+  // Re-validate the service against the clinic — the user could have edited
+  // the dropdown HTML or carried over a service that no longer belongs here.
+  const { data: svcRow } = await admin
+    .from('services')
+    .select('id')
+    .eq('id', serviceId)
+    .eq('clinic_id', clinicId)
+    .maybeSingle()
+  if (!svcRow) return { error: 'Service not found' }
+
   const { error } = await admin
     .from('treatment_packages')
-    .update({ package_name: packageName, total_price: totalPrice, total_sessions: totalSessions, notes })
+    .update({
+      service_id: serviceId,
+      package_name: packageName,
+      total_price: totalPrice,
+      total_sessions: totalSessions,
+      notes,
+    })
     .eq('id', id)
     .eq('clinic_id', clinicId)
 

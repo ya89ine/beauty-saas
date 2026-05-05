@@ -437,6 +437,12 @@ function PackageFormDialog({
     e.preventDefault()
     setFormError(null)
     const fd = new FormData(e.currentTarget)
+    // Service is the link that appointments rely on (their service_id is
+    // derived from the package), so block the save before we round-trip.
+    if (!((fd.get('service_id') as string) || '').trim()) {
+      setFormError('Please select a service for this package')
+      return
+    }
     startTransition(async () => {
       const result = editing
         ? await updatePackage(editing.id, fd)
@@ -504,20 +510,24 @@ function PackageFormDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="service_id">Service (optional)</Label>
+            <Label htmlFor="service_id">Service *</Label>
             <select
               id="service_id"
               name="service_id"
+              required
               defaultValue={editing?.service_id ?? ''}
               className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer"
             >
-              <option value="">No specific service</option>
+              <option value="" disabled>Select a service</option>
               {services.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
               ))}
             </select>
+            <p className="text-[11px] text-muted-foreground">
+              Appointments inherit the service from this package.
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">
