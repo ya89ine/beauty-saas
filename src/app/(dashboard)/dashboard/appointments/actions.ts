@@ -114,80 +114,117 @@ export async function searchClients(query: string): Promise<{
   return { clients: data ?? [] }
 }
 
-// ─── Resolve appointment → client link ───────────────────────────────────────
+// ─── Active-package query for the appointment form ───────────────────────────
 //
-// Three paths, in order of preference:
-//   1. Caller passed an explicit client_id (selected in the combobox) →
-//      verify it belongs to this clinic, and pull authoritative name/email/phone
-//      from the client record so the appointment stays in sync.
-//   2. No client_id but a contact identifier (phone or email) was supplied →
-//      look up an existing client by exact match. If found, reuse it (this is
-//      the "prevent duplicate contacts" rule). Update its name if blank.
-//   3. Otherwise → create a new client and use that id.
-//
-// Returns the resolved id and the canonical name/email/phone to denormalize
-// onto the appointments row.
-async function resolveClientForAppointment(
-  admin: SupabaseClient<Database>,
-  clinicId: string,
-  input: {
-    clientIdRaw: string
-    name: string
-    email: string | null
-    phone: string | null
-  },
-): Promise<
-  | { error: string }
-  | { clientId: string; name: string; email: string | null; phone: string | null }
-> {
-  const { clientIdRaw, name } = input
-  const email = input.email?.trim().toLowerCase() || null
-  const phone = input.phone?.trim() || null
+// The appointment form uses this to populate the package dropdown after the
+// user picks a client. Only `active` packages with a service attached are
+// returned — the appointment requires a `service_id`, which it derives from
+// the package.
+export type ActivePackage = {
+  id: string
+  package_name: string
+  service_id: string | null
+  service_name: string | null
+  service_duration_minutes: number | null
+  total_sessions: number
+  completed_sessions: number
+  total_price: number
+  paid_amount: number
+}
 
-  // Path 1: explicit selection
-  if (clientIdRaw) {
-    const { data: existing } = await admin
-      .from('clients')
-      .select('id, name, email, phone')
-      .eq('id', clientIdRaw)
-      .eq('clinic_id', clinicId)
-      .maybeSingle()
-    if (!existing) return { error: 'Selected client no longer exists' }
-    return { clientId: existing.id, name: existing.name, email: existing.email, phone: existing.phone }
+export async function getClientActivePackages(clientId: string): Promise<{
+  error?: string
+  packages?: ActivePackage[]
+}> {
+  const auth = await getAuthorizedClinic()
+  if ('error' in auth) return { error: auth.error }
+  const { clinicId } = auth
+
+  const admin = createAdminClient()
+  const { data: pkgs, error } = await admin
+    .from('treatment_packages')
+    .select('id, package_name, service_id, total_sessions, completed_sessions, total_price, paid_amount')
+    .eq('clinic_id', clinicId)
+    .eq('client_id', clientId)
+    .eq('status', 'active')
+    .order('created_at', { ascending: true })
+
+  if (error) {
+    console.error('[appointments.getClientActivePackages] failed', error)
+    return { error: fmtSupabaseError('Failed to load packages', error) }
   }
 
-  if (!name) return { error: 'Client name is required' }
-
-  // Path 2: dedup by contact
-  if (phone || email) {
-    const orParts: string[] = []
-    if (phone) orParts.push(`phone.eq.${phone.replace(/[*(),"]/g, '')}`)
-    if (email) orParts.push(`email.eq.${email.replace(/[*(),"]/g, '')}`)
-    if (orParts.length > 0) {
-      const { data: matches } = await admin
-        .from('clients')
-        .select('id, name, email, phone')
-        .eq('clinic_id', clinicId)
-        .or(orParts.join(','))
-        .limit(1)
-      if (matches && matches.length > 0) {
-        return { clientId: matches[0].id, name: matches[0].name, email: matches[0].email, phone: matches[0].phone }
-      }
+  // Generated Supabase types don't model the packages→services FK, so PostgREST
+  // embeds fail typechecking. Two queries keep the types honest at the cost of
+  // one extra round-trip — small fixed-cost since we already filter to one
+  // client's active packages.
+  const serviceIds = Array.from(
+    new Set(
+      (pkgs ?? []).map((p) => p.service_id).filter((s): s is string => !!s),
+    ),
+  )
+  const serviceMap = new Map<string, { name: string; duration_minutes: number }>()
+  if (serviceIds.length > 0) {
+    const { data: svcs } = await admin
+      .from('services')
+      .select('id, name, duration_minutes')
+      .in('id', serviceIds)
+    for (const s of svcs ?? []) {
+      serviceMap.set(s.id, { name: s.name, duration_minutes: s.duration_minutes })
     }
   }
 
-  // Path 3: create new client
-  const { data: created, error: createErr } = await admin
-    .from('clients')
-    .insert({ clinic_id: clinicId, name, email, phone })
-    .select('id, name, email, phone')
-    .single()
-  if (createErr) {
-    console.error('[appointments.resolveClient] insert clients failed', createErr)
-    return { error: fmtSupabaseError('Failed to create client', createErr) }
+  const packages: ActivePackage[] = (pkgs ?? []).map((p) => {
+    const svc = p.service_id ? serviceMap.get(p.service_id) : null
+    return {
+      id: p.id,
+      package_name: p.package_name,
+      service_id: p.service_id,
+      service_name: svc?.name ?? null,
+      service_duration_minutes: svc?.duration_minutes ?? null,
+      total_sessions: p.total_sessions,
+      completed_sessions: p.completed_sessions,
+      total_price: p.total_price,
+      paid_amount: p.paid_amount,
+    }
+  })
+  return { packages }
+}
+
+// Validate a package belongs to this clinic + client and is currently active.
+// Returns the resolved row (with service_id) or an error string.
+async function loadActivePackage(
+  admin: SupabaseClient<Database>,
+  clinicId: string,
+  packageId: string,
+  expectedClientId: string,
+): Promise<
+  | { error: string }
+  | { id: string; client_id: string; service_id: string; defaultDuration: number }
+> {
+  const { data, error } = await admin
+    .from('treatment_packages')
+    .select('id, client_id, service_id, status')
+    .eq('id', packageId)
+    .eq('clinic_id', clinicId)
+    .maybeSingle()
+  if (error) return { error: fmtSupabaseError('Failed to load package', error) }
+  if (!data) return { error: 'Package not found' }
+  if (data.client_id !== expectedClientId) return { error: 'Package does not belong to this client' }
+  if (data.status !== 'active') return { error: 'Package is not active' }
+  if (!data.service_id) return { error: 'Package has no service attached — set a service on the package first' }
+  const { data: svc } = await admin
+    .from('services')
+    .select('duration_minutes')
+    .eq('id', data.service_id)
+    .eq('clinic_id', clinicId)
+    .maybeSingle()
+  return {
+    id: data.id,
+    client_id: data.client_id,
+    service_id: data.service_id,
+    defaultDuration: svc?.duration_minutes ?? 60,
   }
-  if (!created) return { error: 'Failed to create client (no row returned)' }
-  return { clientId: created.id, name: created.name, email: created.email, phone: created.phone }
 }
 
 export async function createAppointment(formData: FormData): Promise<Result> {
@@ -196,34 +233,33 @@ export async function createAppointment(formData: FormData): Promise<Result> {
     if ('error' in auth) return { error: auth.error }
     const { clinicId } = auth
 
-    const clientName = ((formData.get('client_name') as string) ?? '').trim()
-    const serviceId = (formData.get('service_id') as string) ?? ''
+    const clientId = ((formData.get('client_id') as string) ?? '').trim()
+    const packageId = ((formData.get('package_id') as string) ?? '').trim()
     const startsAtStr = (formData.get('starts_at') as string) ?? ''
 
-    if (!clientName) return { error: 'Client name is required' }
-    if (!serviceId) return { error: 'Service is required' }
+    if (!clientId) return { error: 'Please select a client' }
+    if (!packageId) return { error: 'Please select a package for this client' }
     if (!startsAtStr) return { error: 'Start date/time is required' }
 
     const admin = createAdminClient()
 
-    const { data: service, error: serviceErr } = await admin
-      .from('services')
-      .select('duration_minutes')
-      .eq('id', serviceId)
+    // Verify the client belongs to this clinic, and pull the canonical
+    // name/email/phone to denormalize onto the appointment row.
+    const { data: client, error: clientErr } = await admin
+      .from('clients')
+      .select('id, name, email, phone')
+      .eq('id', clientId)
       .eq('clinic_id', clinicId)
-      .single()
+      .maybeSingle()
+    if (clientErr) return { error: fmtSupabaseError('Failed to load client', clientErr) }
+    if (!client) return { error: 'Client not found' }
 
-    if (serviceErr) {
-      console.error('[appointments.create] service lookup failed', serviceErr)
-      // PostgREST returns code PGRST116 when .single() finds zero rows — that's
-      // a "not found" condition, not a real DB failure, so keep the friendlier
-      // wording. Anything else (RLS denial, network) surfaces verbatim.
-      if (serviceErr.code === 'PGRST116') return { error: 'Service not found' }
-      return { error: fmtSupabaseError('Failed to load service', serviceErr) }
-    }
-    if (!service) return { error: 'Service not found' }
+    // Validate the package and pull its service_id (the appointment cannot
+    // store its own service — the service comes from the package).
+    const pkg = await loadActivePackage(admin, clinicId, packageId, client.id)
+    if ('error' in pkg) return { error: pkg.error }
 
-    const duration = parseDuration(formData.get('duration_minutes'), service.duration_minutes)
+    const duration = parseDuration(formData.get('duration_minutes'), pkg.defaultDuration)
     if (duration === null) return { error: 'Invalid duration' }
     if (duration % SLOT_MINUTES !== 0) {
       return { error: `Duration must be a multiple of ${SLOT_MINUTES} minutes` }
@@ -237,7 +273,6 @@ export async function createAppointment(formData: FormData): Promise<Result> {
     const endsAt = new Date(startsAt.getTime() + duration * 60_000)
 
     const staffId = (formData.get('staff_id') as string) || null
-    const explicitPackageId = (formData.get('package_id') as string) || null
     const newStatus = ((formData.get('status') as string) || 'pending') as AptStatus
 
     // Overlap check: only enforced when a staff member is assigned and the new
@@ -247,46 +282,19 @@ export async function createAppointment(formData: FormData): Promise<Result> {
       if (conflict) return { error: formatConflict(conflict) }
     }
 
-    const resolved = await resolveClientForAppointment(admin, clinicId, {
-      clientIdRaw: ((formData.get('client_id') as string) ?? '').trim(),
-      name: clientName,
-      email: ((formData.get('client_email') as string) ?? '').trim() || null,
-      phone: ((formData.get('client_phone') as string) ?? '').trim() || null,
-    })
-    if ('error' in resolved) return { error: resolved.error }
-
-    // Auto-link to an active package matching this (client, service) pair so the
-    // CRM's session counter stays accurate without a separate "link package"
-    // step in the UI. An explicit package_id from the caller still wins.
-    const packageId =
-      explicitPackageId ?? (await findActivePackageForAppointment(admin, clinicId, resolved.clientId, serviceId))
-
-    // Snapshot the price at booking time so historical revenue stays correct
-    // even if the service's price is later edited.
-    const { data: serviceFull, error: priceErr } = await admin
-      .from('services')
-      .select('price')
-      .eq('id', serviceId)
-      .eq('clinic_id', clinicId)
-      .single()
-    if (priceErr) {
-      console.error('[appointments.create] service price lookup failed', priceErr)
-      return { error: fmtSupabaseError('Failed to load service price', priceErr) }
-    }
-
     const { error } = await admin.from('appointments').insert({
       clinic_id: clinicId,
-      client_id: resolved.clientId,
-      client_name: resolved.name,
-      client_email: resolved.email,
-      client_phone: resolved.phone,
-      service_id: serviceId,
+      client_id: client.id,
+      client_name: client.name,
+      client_email: client.email,
+      client_phone: client.phone,
+      service_id: pkg.service_id,
       staff_id: staffId,
       starts_at: startsAt.toISOString(),
       ends_at: endsAt.toISOString(),
       status: newStatus,
       notes: (formData.get('notes') as string) || null,
-      package_id: packageId,
+      package_id: pkg.id,
     })
 
     if (error) {
@@ -294,8 +302,8 @@ export async function createAppointment(formData: FormData): Promise<Result> {
       return { error: fmtSupabaseError('Failed to create appointment', error) }
     }
 
-    if (newStatus === 'completed' && packageId) {
-      await incrementPackageSessions(admin, packageId)
+    if (newStatus === 'completed') {
+      await incrementPackageSessions(admin, pkg.id)
     }
 
     revalidatePath('/dashboard/appointments')
@@ -315,12 +323,12 @@ export async function updateAppointment(id: string, formData: FormData): Promise
   if ('error' in auth) return { error: auth.error }
   const { clinicId } = auth
 
-  const clientName = ((formData.get('client_name') as string) ?? '').trim()
-  const serviceId = (formData.get('service_id') as string) ?? ''
+  const clientId = ((formData.get('client_id') as string) ?? '').trim()
+  const packageId = ((formData.get('package_id') as string) ?? '').trim()
   const startsAtStr = (formData.get('starts_at') as string) ?? ''
 
-  if (!clientName) return { error: 'Client name is required' }
-  if (!serviceId) return { error: 'Service is required' }
+  if (!clientId) return { error: 'Please select a client' }
+  if (!packageId) return { error: 'Please select a package for this client' }
   if (!startsAtStr) return { error: 'Start date/time is required' }
 
   const admin = createAdminClient()
@@ -334,16 +342,19 @@ export async function updateAppointment(id: string, formData: FormData): Promise
 
   if (!currentApt) return { error: 'Appointment not found' }
 
-  const { data: service } = await admin
-    .from('services')
-    .select('duration_minutes')
-    .eq('id', serviceId)
+  const { data: client, error: clientErr } = await admin
+    .from('clients')
+    .select('id, name, email, phone')
+    .eq('id', clientId)
     .eq('clinic_id', clinicId)
-    .single()
+    .maybeSingle()
+  if (clientErr) return { error: fmtSupabaseError('Failed to load client', clientErr) }
+  if (!client) return { error: 'Client not found' }
 
-  if (!service) return { error: 'Service not found' }
+  const pkg = await loadActivePackage(admin, clinicId, packageId, client.id)
+  if ('error' in pkg) return { error: pkg.error }
 
-  const duration = parseDuration(formData.get('duration_minutes'), service.duration_minutes)
+  const duration = parseDuration(formData.get('duration_minutes'), pkg.defaultDuration)
   if (duration === null) return { error: 'Invalid duration' }
   if (duration % SLOT_MINUTES !== 0) {
     return { error: `Duration must be a multiple of ${SLOT_MINUTES} minutes` }
@@ -357,7 +368,6 @@ export async function updateAppointment(id: string, formData: FormData): Promise
   const endsAt = new Date(startsAt.getTime() + duration * 60_000)
 
   const staffId = (formData.get('staff_id') as string) || null
-  const explicitPackageId = (formData.get('package_id') as string) || null
   const newStatus = ((formData.get('status') as string) || 'pending') as AptStatus
 
   if (staffId && newStatus !== 'cancelled') {
@@ -365,65 +375,45 @@ export async function updateAppointment(id: string, formData: FormData): Promise
     if (conflict) return { error: formatConflict(conflict) }
   }
 
-  const resolved = await resolveClientForAppointment(admin, clinicId, {
-    clientIdRaw: ((formData.get('client_id') as string) ?? '').trim(),
-    name: clientName,
-    email: ((formData.get('client_email') as string) ?? '').trim() || null,
-    phone: ((formData.get('client_phone') as string) ?? '').trim() || null,
-  })
-  if ('error' in resolved) return { error: resolved.error }
-
-  // Re-evaluate the package link if (a) the client/service changed (existing
-  // link may no longer apply) or (b) there's no link yet. An explicit
-  // package_id from the caller still wins. Keeping the same package on a
-  // simple time/staff edit avoids re-querying for unchanged rows.
-  const clientServiceChanged =
-    resolved.clientId !== currentApt.client_id || serviceId !== currentApt.service_id
-  let packageId = explicitPackageId ?? currentApt.package_id
-  if (!explicitPackageId && (clientServiceChanged || !currentApt.package_id)) {
-    packageId =
-      (await findActivePackageForAppointment(admin, clinicId, resolved.clientId, serviceId)) ??
-      currentApt.package_id
-  }
-
   const { error } = await admin
     .from('appointments')
     .update({
-      client_id: resolved.clientId,
-      client_name: resolved.name,
-      client_email: resolved.email,
-      client_phone: resolved.phone,
-      service_id: serviceId,
+      client_id: client.id,
+      client_name: client.name,
+      client_email: client.email,
+      client_phone: client.phone,
+      service_id: pkg.service_id,
       staff_id: staffId,
       starts_at: startsAt.toISOString(),
       ends_at: endsAt.toISOString(),
       status: newStatus,
       notes: (formData.get('notes') as string) || null,
-      package_id: packageId,
+      package_id: pkg.id,
     })
     .eq('id', id)
     .eq('clinic_id', clinicId)
 
   if (error) return { error: 'Failed to update appointment' }
 
-  // Session counter sync. Three transitions matter:
-  //   • non-completed → completed: increment new package
-  //   • completed → non-completed: decrement old package (it was credited
-  //     before, so keep the counter honest)
+  // Session counter sync — keeps the package's `completed_sessions` honest
+  // without ever double-counting a completed appointment:
+  //   • non-completed → completed: credit the new package once
+  //   • completed → non-completed: refund the old package (it was credited
+  //     before, so keep the counter accurate)
   //   • completed → completed but package_id changed: move the credit
   const wasCompleted = currentApt.status === 'completed'
   const isCompleted = newStatus === 'completed'
-  if (!wasCompleted && isCompleted && packageId) {
-    await incrementPackageSessions(admin, packageId)
+  if (!wasCompleted && isCompleted) {
+    await incrementPackageSessions(admin, pkg.id)
   } else if (wasCompleted && !isCompleted && currentApt.package_id) {
     await decrementPackageSessions(admin, currentApt.package_id)
   } else if (
     wasCompleted &&
     isCompleted &&
-    currentApt.package_id !== packageId
+    currentApt.package_id !== pkg.id
   ) {
     if (currentApt.package_id) await decrementPackageSessions(admin, currentApt.package_id)
-    if (packageId) await incrementPackageSessions(admin, packageId)
+    await incrementPackageSessions(admin, pkg.id)
   }
 
   revalidatePath('/dashboard/appointments')
@@ -515,33 +505,6 @@ async function decrementPackageSessions(
       status: newCompleted >= pkg.total_sessions ? 'completed' : 'active',
     })
     .eq('id', packageId)
-}
-
-// Find a still-active package the appointment can attach to: same client,
-// same service, sessions remaining. Used when the form/import doesn't supply
-// an explicit package_id — we'd rather attach automatically than silently
-// drop the link to billing.
-async function findActivePackageForAppointment(
-  admin: SupabaseClient<Database>,
-  clinicId: string,
-  clientId: string,
-  serviceId: string,
-): Promise<string | null> {
-  const { data } = await admin
-    .from('treatment_packages')
-    .select('id, total_sessions, completed_sessions')
-    .eq('clinic_id', clinicId)
-    .eq('client_id', clientId)
-    .eq('service_id', serviceId)
-    .eq('status', 'active')
-    .order('created_at', { ascending: true })
-
-  if (!data || data.length === 0) return null
-  // Pick the oldest active package that still has remaining sessions, falling
-  // back to the first active row so we don't silently drop the link if every
-  // package is full (the service-action will surface the issue elsewhere).
-  const withRemaining = data.find((p) => p.completed_sessions < p.total_sessions)
-  return (withRemaining ?? data[0]).id
 }
 
 // ─── Auto-complete past appointments ─────────────────────────────────────────

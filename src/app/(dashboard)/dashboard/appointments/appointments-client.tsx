@@ -50,12 +50,23 @@ import {
   Phone,
   X,
   UserPlus,
+  Package as PackageIcon,
+  AlertCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Service, Staff } from '@/types/database'
-import { createAppointment, updateAppointment, deleteAppointment, searchClients, type ClientSummary } from './actions'
+import {
+  createAppointment,
+  updateAppointment,
+  deleteAppointment,
+  searchClients,
+  getClientActivePackages,
+  type ClientSummary,
+  type ActivePackage,
+} from './actions'
+import Link from 'next/link'
 import { APPOINTMENT_DURATIONS } from './constants'
-import { getServiceColor, getServiceHex, type ServiceColor } from '@/lib/service-colors'
+import { getServiceColor, type ServiceColor } from '@/lib/service-colors'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -93,6 +104,7 @@ type AppointmentRow = {
   client_phone: string | null
   service_id: string
   staff_id: string | null
+  package_id: string | null
   starts_at: string
   ends_at: string
   status: AptStatus
@@ -496,7 +508,7 @@ function SchedulerView({
     fd.set('client_phone',     apt.client_phone ?? '')
     fd.set('service_id',       apt.service_id)
     fd.set('staff_id',         newStaffId ?? '')
-    fd.set('starts_at',        toDatetimeLocal(clampedStart))
+    fd.set('starts_at',        clampedStart.toISOString())
     fd.set('duration_minutes', String(aptDuration))
     fd.set('status',           apt.status)
     fd.set('notes',            apt.notes ?? '')
@@ -867,6 +879,7 @@ function ClientSelector({
   onClear,
   onCreateNew,
   inputRef,
+  allowCreate = true,
 }: {
   selectedId: string | null
   name: string
@@ -874,8 +887,9 @@ function ClientSelector({
   onChange: (name: string) => void
   onSelect: (client: ClientSummary) => void
   onClear: () => void
-  onCreateNew: () => void
+  onCreateNew?: () => void
   inputRef?: React.RefObject<HTMLInputElement | null>
+  allowCreate?: boolean
 }) {
   const [remoteResults, setRemoteResults] = useState<ClientSummary[]>([])
   const [open, setOpen] = useState(false)
@@ -946,7 +960,7 @@ function ClientSelector({
   }, [open])
 
   const exactMatch = results.some((c) => c.name.toLowerCase() === lower)
-  const showCreate = !selectedId && trimmed.length > 0 && !exactMatch
+  const showCreate = allowCreate && !!onCreateNew && !selectedId && trimmed.length > 0 && !exactMatch
   // Total selectable rows = client matches + an optional "create new" row that
   // sits at the end. Keyboard nav indexes into this combined list.
   const totalRows = results.length + (showCreate ? 1 : 0)
@@ -970,7 +984,7 @@ function ClientSelector({
     if (totalRows === 0) return
     if (activeIndex < results.length) {
       onSelect(results[activeIndex])
-    } else {
+    } else if (onCreateNew) {
       onCreateNew()
     }
     setOpen(false)
@@ -1111,7 +1125,7 @@ function ClientSelector({
               })}
             </ul>
           )}
-          {showCreate && (
+          {showCreate && onCreateNew && (
             <button
               type="button"
               data-row-index={results.length}
@@ -1131,66 +1145,9 @@ function ClientSelector({
   )
 }
 
-// Color-coded service picker. Renders a real <select name="service_id"> so it
-// participates in form submission unchanged, but overlays a styled trigger
-// that shows the selected service's color swatch. The native <select> sits
-// invisibly on top so the OS popup still works for keyboard/touch users.
-function ServiceSelect({
-  services,
-  defaultValue,
-}: {
-  services: Service[]
-  defaultValue: string
-}) {
-  const [value, setValue] = useState<string>(defaultValue)
-  const selected = services.find((s) => s.id === value) ?? null
-  const swatch = selected ? getServiceHex(selected) : null
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <Label htmlFor="service_id">Service *</Label>
-      <div className="relative">
-        {/* Visual trigger: shows color swatch for the current value. */}
-        <div
-          className="pointer-events-none flex h-8 w-full items-center gap-2 rounded-lg border border-input bg-transparent px-2.5 text-sm"
-          aria-hidden="true"
-        >
-          {swatch && (
-            <span
-              className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-foreground/10"
-              style={{ backgroundColor: swatch }}
-            />
-          )}
-          <span className={`truncate ${selected ? '' : 'text-muted-foreground'}`}>
-            {selected ? `${selected.name} (${selected.duration_minutes} min)` : 'Select service'}
-          </span>
-          <span className="ml-auto text-muted-foreground">▾</span>
-        </div>
-        <select
-          id="service_id"
-          name="service_id"
-          required
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-        >
-          <option value="" disabled>Select service</option>
-          {services.map((s) => {
-            const hex = getServiceHex(s)
-            return (
-              <option
-                key={s.id}
-                value={s.id}
-                style={{ backgroundColor: `${hex}22`, color: 'inherit' }}
-              >
-                ● {s.name} ({s.duration_minutes} min)
-              </option>
-            )
-          })}
-        </select>
-      </div>
-    </div>
-  )
+// Format a duration in minutes for the dropdown.
+function fmtDuration(m: number): string {
+  return m < 60 ? `${m} min` : m === 60 ? '1 hour' : m % 60 === 0 ? `${m / 60} hours` : `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
 function AptFormDialog({
@@ -1199,7 +1156,6 @@ function AptFormDialog({
   editing,
   defaultStartsAt,
   defaultStaffId,
-  services,
   staffList,
   clients,
   onSaved,
@@ -1210,7 +1166,6 @@ function AptFormDialog({
   editing: AppointmentRow | null
   defaultStartsAt: string
   defaultStaffId: string | null
-  services: Service[]
   staffList: Staff[]
   clients: ClientSummary[]
   onSaved: () => void
@@ -1219,22 +1174,24 @@ function AptFormDialog({
   const [formError, setFormError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
 
-  // Controlled client fields. The server uses `client_id` as the source of truth
-  // when present; otherwise it dedups by phone/email and creates a client.
+  // Step 1 — pick a client. We only allow selecting an existing client here;
+  // the appointment requires a package, and a package requires a client to
+  // already exist in the CRM.
   const [clientId, setClientId] = useState<string | null>(editing?.client_id ?? null)
   const [clientName, setClientName] = useState(editing?.client_name ?? '')
-  const [clientEmail, setClientEmail] = useState(editing?.client_email ?? '')
-  const [clientPhone, setClientPhone] = useState(editing?.client_phone ?? '')
-  const emailInputRef = useRef<HTMLInputElement | null>(null)
   const nameInputRef = useRef<HTMLInputElement | null>(null)
 
-  // Controlled time fields so we can render a live "10:00 → 11:00" preview.
+  // Step 2 — packages for the picked client. `null` means "not yet loaded"
+  // (so we don't flash "no packages" before the fetch resolves).
+  const [packages, setPackages] = useState<ActivePackage[] | null>(null)
+  const [packagesLoading, setPackagesLoading] = useState(false)
+  const [packageId, setPackageId] = useState<string | null>(editing?.package_id ?? null)
+
+  // Step 3 — staff + time. Duration is a separate dropdown, defaulting to the
+  // package's service duration when a package is picked.
   const initialDuration = (() => {
     if (editing) {
       const m = differenceInMinutes(parseISO(editing.ends_at), parseISO(editing.starts_at))
-      // Snap to the nearest dropdown option so the select shows a sensible
-      // default; the server still accepts any value, so editing legacy
-      // appointments doesn't lose precision unless the user actually changes it.
       return APPOINTMENT_DURATIONS.reduce(
         (best, opt) => (Math.abs(opt - m) < Math.abs(best - m) ? opt : best),
         60 as number,
@@ -1242,19 +1199,28 @@ function AptFormDialog({
     }
     return 60
   })()
+  const [staffId, setStaffId] = useState<string>(editing?.staff_id ?? defaultStaffId ?? '')
   const [startsAt, setStartsAt] = useState<string>(
     editing ? toDatetimeLocal(snapToSlot(parseISO(editing.starts_at))) : defaultStartsAt,
   )
   const [duration, setDuration] = useState<number>(initialDuration)
+  const [status, setStatus] = useState<AptStatus>(editing?.status ?? 'pending')
+  const [notes, setNotes] = useState<string>(editing?.notes ?? '')
 
+  // Reset all controlled fields when the dialog opens (or the editing target
+  // changes). The form has a `key` on `${editing.id}-${open}` that also
+  // remounts it, so this effect is the belt-and-suspenders that catches any
+  // case where the same dialog instance is reused.
   useEffect(() => {
     if (!open) return
     setFormError(null)
     setClientId(editing?.client_id ?? null)
     setClientName(editing?.client_name ?? '')
-    setClientEmail(editing?.client_email ?? '')
-    setClientPhone(editing?.client_phone ?? '')
+    setPackageId(editing?.package_id ?? null)
+    setStaffId(editing?.staff_id ?? defaultStaffId ?? '')
     setStartsAt(editing ? toDatetimeLocal(snapToSlot(parseISO(editing.starts_at))) : defaultStartsAt)
+    setStatus(editing?.status ?? 'pending')
+    setNotes(editing?.notes ?? '')
     if (editing) {
       const m = differenceInMinutes(parseISO(editing.ends_at), parseISO(editing.starts_at))
       const snapped = APPOINTMENT_DURATIONS.reduce(
@@ -1265,36 +1231,99 @@ function AptFormDialog({
     } else {
       setDuration(60)
     }
-  }, [open, editing?.id, editing?.client_id, editing?.client_name, editing?.client_email, editing?.client_phone, editing?.starts_at, editing?.ends_at, defaultStartsAt])
+  }, [open, editing?.id, editing?.client_id, editing?.package_id, editing?.staff_id, editing?.status, editing?.notes, editing?.starts_at, editing?.ends_at, defaultStartsAt, defaultStaffId])
 
-  const linked = !!clientId
+  // Whenever the picked client changes, refetch their active packages. Empty
+  // selection → clear the dropdown so we don't keep stale rows around.
+  useEffect(() => {
+    if (!open) return
+    if (!clientId) { setPackages(null); setPackagesLoading(false); return }
+    let cancelled = false
+    setPackagesLoading(true)
+    getClientActivePackages(clientId).then((r) => {
+      if (cancelled) return
+      if (r.error) {
+        setFormError(r.error)
+        setPackages([])
+      } else {
+        const list = r.packages ?? []
+        setPackages(list)
+        // If we're editing and the existing package is still active, keep it.
+        // Otherwise auto-pick when there's exactly one option, so the new-flow
+        // ("Client → Package → Staff → Time") feels one-tap when possible.
+        setPackageId((prev) => {
+          if (prev && list.some((p) => p.id === prev)) return prev
+          if (!editing && list.length === 1) return list[0].id
+          return null
+        })
+      }
+      setPackagesLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [open, clientId, editing])
 
-  // Live time-range preview ("HH:mm → HH:mm"). parseISO handles the
-  // datetime-local string ("yyyy-MM-ddTHH:mm") as a local time.
+  const selectedPackage = packages?.find((p) => p.id === packageId) ?? null
+  const sessionsRemaining = selectedPackage
+    ? Math.max(0, selectedPackage.total_sessions - selectedPackage.completed_sessions)
+    : null
+  const remainingBalance = selectedPackage
+    ? Math.max(0, selectedPackage.total_price - selectedPackage.paid_amount)
+    : null
+
+  // Live time-range preview ("HH:mm → HH:mm").
   const startDate = startsAt ? parseISO(startsAt) : null
   const endDate = startDate && !isNaN(startDate.getTime()) ? addMinutes(startDate, duration) : null
   const preview = startDate && endDate && !isNaN(startDate.getTime())
     ? `${format(startDate, 'HH:mm')} → ${format(endDate, 'HH:mm')}`
     : null
 
+  function handlePackageChange(id: string) {
+    setPackageId(id || null)
+    // Default the duration to the package's service duration on first pick,
+    // but only if the user hasn't yet customized it for this dialog session.
+    const pkg = packages?.find((p) => p.id === id)
+    const svcDur = pkg?.service_duration_minutes
+    if (svcDur && APPOINTMENT_DURATIONS.includes(svcDur as typeof APPOINTMENT_DURATIONS[number])) {
+      setDuration(svcDur)
+    }
+  }
+
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
     setFormError(null)
-    const fd = new FormData(e.currentTarget)
-    // Email/phone inputs are disabled when a client is linked, so they won't
-    // be in the FormData. Set them explicitly so the server has full context
-    // (even though it'll override with the client record's values).
-    fd.set('client_id', clientId ?? '')
-    fd.set('client_name', clientName.trim())
-    fd.set('client_email', clientEmail.trim())
-    fd.set('client_phone', clientPhone.trim())
-    // Browser support for `step` on datetime-local is uneven, so snap defensively.
-    const parsed = startsAt ? parseISO(startsAt) : null
-    const snappedStart = parsed && !isNaN(parsed.getTime())
-      ? toDatetimeLocal(snapToSlot(parsed))
-      : startsAt
-    fd.set('starts_at', snappedStart)
+
+    if (!clientId) { setFormError('Please select a client'); return }
+    if (!packageId) { setFormError('Please select a package'); return }
+
+    const userStart = startsAt ? parseISO(startsAt) : null
+    if (!userStart || isNaN(userStart.getTime())) {
+      setFormError('Please pick a valid start time')
+      return
+    }
+    const startDt = snapToSlot(userStart)
+    const endDt = new Date(startDt.getTime() + duration * 60_000)
+
+    // eslint-disable-next-line no-console
+    console.log('[appointment-form] saving', {
+      mode: editing ? 'edit' : 'create',
+      client_id: clientId,
+      package_id: packageId,
+      staff_id: staffId || null,
+      start_time: startDt.toISOString(),
+      end_time: endDt.toISOString(),
+      duration_minutes: duration,
+      status,
+    })
+
+    const fd = new FormData()
+    fd.set('client_id', clientId)
+    fd.set('package_id', packageId)
+    fd.set('staff_id', staffId)
+    fd.set('starts_at', startDt.toISOString())
     fd.set('duration_minutes', String(duration))
+    fd.set('status', status)
+    fd.set('notes', notes)
+
     startTransition(async () => {
       const result = editing
         ? await updateAppointment(editing.id, fd)
@@ -1306,7 +1335,7 @@ function AptFormDialog({
     })
   }
 
-  const effectiveStaffId = editing?.staff_id ?? defaultStaffId ?? ''
+  const showNoPackages = !!clientId && !packagesLoading && packages !== null && packages.length === 0
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!isPending) onOpenChange(v) }}>
@@ -1322,152 +1351,146 @@ function AptFormDialog({
             </div>
           )}
 
+          {/* 1 — Client */}
           <div className="flex flex-col gap-1.5">
-            <Label>Client *</Label>
+            <Label>1. Client *</Label>
             <ClientSelector
               selectedId={clientId}
               name={clientName}
               clients={clients}
               inputRef={nameInputRef}
+              allowCreate={false}
               onChange={setClientName}
               onSelect={(c) => {
                 setClientId(c.id)
                 setClientName(c.name)
-                setClientEmail(c.email ?? '')
-                setClientPhone(c.phone ?? '')
+                // Resetting the package so the new client's list takes over.
+                setPackageId(null)
               }}
               onClear={() => {
                 setClientId(null)
-              }}
-              onCreateNew={() => {
-                // Stays unlinked; server will create the client on submit.
-                // Move focus to email so contact info can be filled in fast.
-                setClientId(null)
-                emailInputRef.current?.focus()
+                setPackageId(null)
               }}
             />
           </div>
 
-          {linked ? (
-            // Polished CRM-style summary card for the resolved client. The
-            // server reads client_id and ignores email/phone, but we keep the
-            // values in state so unlinking restores them as editable inputs.
-            <div className="flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50/50 px-3 py-2.5">
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-700">
-                {(clientName.charAt(0) || '?').toUpperCase()}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold leading-tight text-emerald-900">
-                  {clientName || 'Linked client'}
-                </p>
-                <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-emerald-800/80">
-                  {clientEmail && (
-                    <span className="inline-flex items-center gap-1 truncate">
-                      <Mail className="h-3 w-3 shrink-0" />
-                      <span className="truncate">{clientEmail}</span>
-                    </span>
-                  )}
-                  {clientPhone && (
-                    <span className="inline-flex items-center gap-1 truncate">
-                      <Phone className="h-3 w-3 shrink-0" />
-                      <span className="truncate tabular-nums">{clientPhone}</span>
-                    </span>
-                  )}
-                  {!clientEmail && !clientPhone && <span className="italic">No contact info on file</span>}
+          {/* 2 — Package */}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="package_id">2. Package *</Label>
+            {!clientId ? (
+              <p className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                Select a client first to see their active packages.
+              </p>
+            ) : packagesLoading ? (
+              <p className="rounded-lg border border-dashed border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                Loading packages…
+              </p>
+            ) : showNoPackages ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                  <div className="flex-1">
+                    <p className="font-medium leading-snug">
+                      Create a package for this client before booking
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-amber-800/80">
+                      Appointments draw from a purchased package — no package, no booking.
+                    </p>
+                    <Link
+                      href={`/dashboard/packages?client=${clientId}`}
+                      className="mt-2 inline-flex h-7 items-center gap-1.5 rounded-md bg-amber-600 px-2.5 text-xs font-semibold text-white hover:bg-amber-700"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      Create package
+                    </Link>
+                  </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setClientId(null)
-                  // Don't wipe the contact fields — the user may have wanted to
-                  // edit them; clearing the link reactivates the inputs below.
-                  // Refocus the search input so they can pick a different client.
-                  setTimeout(() => nameInputRef.current?.focus(), 0)
-                }}
-                className="shrink-0 rounded-md border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-medium text-emerald-800 hover:bg-emerald-50"
-              >
-                Change
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="client_email">Email</Label>
-                <Input
-                  ref={emailInputRef}
-                  id="client_email"
-                  type="email"
-                  value={clientEmail}
-                  onChange={(e) => setClientEmail(e.target.value)}
-                  placeholder="sara@example.com"
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="client_phone">Phone</Label>
-                <Input
-                  id="client_phone"
-                  type="tel"
-                  value={clientPhone}
-                  onChange={(e) => setClientPhone(e.target.value)}
-                  placeholder="+212 6 00 00 00 00"
-                />
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <ServiceSelect
-              services={services}
-              defaultValue={editing?.service_id ?? ''}
-            />
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="staff_id">Staff member</Label>
-              <select id="staff_id" name="staff_id" defaultValue={effectiveStaffId}
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer">
-                <option value="">Unassigned</option>
-                {staffList.filter((s) => s.is_active).map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            </div>
+            ) : (
+              <>
+                <select
+                  id="package_id"
+                  value={packageId ?? ''}
+                  onChange={(e) => handlePackageChange(e.target.value)}
+                  className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer"
+                  required
+                >
+                  <option value="" disabled>Select a package</option>
+                  {(packages ?? []).map((p) => {
+                    const remaining = Math.max(0, p.total_sessions - p.completed_sessions)
+                    const label = p.service_name
+                      ? `${p.package_name} · ${p.service_name} (${remaining}/${p.total_sessions} left)`
+                      : `${p.package_name} (${remaining}/${p.total_sessions} left)`
+                    return (
+                      <option key={p.id} value={p.id}>{label}</option>
+                    )
+                  })}
+                </select>
+                {selectedPackage && (
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-border bg-muted/30 px-3 py-2 text-[11px] text-foreground">
+                    <span className="inline-flex items-center gap-1.5 font-medium">
+                      <PackageIcon className="h-3.5 w-3.5 text-primary" />
+                      {selectedPackage.service_name ?? 'Service'}
+                    </span>
+                    <span className="text-muted-foreground">·</span>
+                    <span><span className="text-muted-foreground">Sessions left:</span> <span className="font-semibold">{sessionsRemaining}</span> / {selectedPackage.total_sessions}</span>
+                    <span className="text-muted-foreground">·</span>
+                    <span><span className="text-muted-foreground">Balance:</span> <span className="font-semibold tabular-nums">{remainingBalance?.toFixed(2)}</span></span>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="starts_at">Start time *</Label>
-              <Input
-                id="starts_at"
-                type="datetime-local"
-                required
-                step={SLOT_MIN * 60}
-                value={startsAt}
-                onChange={(e) => setStartsAt(e.target.value)}
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Slots run every {SLOT_MIN} minutes (00, 15, 30, 45).
-              </p>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="duration_minutes">Duration *</Label>
-              <select
-                id="duration_minutes"
-                value={duration}
-                onChange={(e) => setDuration(Number(e.target.value))}
-                className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer"
-              >
-                {/* Editing a legacy appointment with a non-standard duration?
-                    Surface it as an extra option so the dropdown reflects the
-                    current saved value. */}
-                {!APPOINTMENT_DURATIONS.includes(duration as typeof APPOINTMENT_DURATIONS[number]) && (
-                  <option value={duration}>{duration} min (current)</option>
-                )}
-                {APPOINTMENT_DURATIONS.map((m) => (
-                  <option key={m} value={m}>
-                    {m < 60 ? `${m} min` : m === 60 ? '1 hour' : m % 60 === 0 ? `${m / 60} hours` : `${Math.floor(m / 60)}h ${m % 60}m`}
-                  </option>
-                ))}
-              </select>
+          {/* 3 — Staff */}
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="staff_id">3. Staff member</Label>
+            <select
+              id="staff_id"
+              value={staffId}
+              onChange={(e) => setStaffId(e.target.value)}
+              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer"
+            >
+              <option value="">Unassigned</option>
+              {staffList.filter((s) => s.is_active).map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* 4 — Date / time */}
+          <div className="flex flex-col gap-1.5">
+            <Label>4. Date &amp; time *</Label>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1">
+                <Input
+                  id="starts_at"
+                  type="datetime-local"
+                  required
+                  step={SLOT_MIN * 60}
+                  value={startsAt}
+                  onChange={(e) => setStartsAt(e.target.value)}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Slots run every {SLOT_MIN} minutes (00, 15, 30, 45).
+                </p>
+              </div>
+              <div className="flex flex-col gap-1">
+                <select
+                  id="duration_minutes"
+                  value={duration}
+                  onChange={(e) => setDuration(Number(e.target.value))}
+                  className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer"
+                >
+                  {!APPOINTMENT_DURATIONS.includes(duration as typeof APPOINTMENT_DURATIONS[number]) && (
+                    <option value={duration}>{duration} min (current)</option>
+                  )}
+                  {APPOINTMENT_DURATIONS.map((m) => (
+                    <option key={m} value={m}>{fmtDuration(m)}</option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-muted-foreground">Duration</p>
+              </div>
             </div>
           </div>
 
@@ -1481,10 +1504,15 @@ function AptFormDialog({
             </div>
           )}
 
+          {/* 5 — Status & notes */}
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="status">Status</Label>
-            <select id="status" name="status" defaultValue={editing?.status ?? 'pending'}
-              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer">
+            <select
+              id="status"
+              value={status}
+              onChange={(e) => setStatus(e.target.value as AptStatus)}
+              className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring cursor-pointer"
+            >
               <option value="pending">Pending</option>
               <option value="confirmed">Confirmed</option>
               <option value="cancelled">Cancelled</option>
@@ -1495,7 +1523,12 @@ function AptFormDialog({
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="notes">Notes</Label>
-            <Textarea id="notes" name="notes" defaultValue={editing?.notes ?? ''} placeholder="Any special instructions…" />
+            <Textarea
+              id="notes"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Any special instructions…"
+            />
           </div>
         </form>
 
@@ -1514,7 +1547,11 @@ function AptFormDialog({
           </div>
           <div className="flex gap-2">
             <Button variant="outline" type="button" disabled={isPending} onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" form="apt-form" disabled={isPending}>
+            <Button
+              type="submit"
+              form="apt-form"
+              disabled={isPending || !clientId || !packageId}
+            >
               {isPending ? 'Saving…' : editing ? 'Save Changes' : 'Book Appointment'}
             </Button>
           </div>
@@ -1854,7 +1891,6 @@ export function AppointmentsClient({ appointments, services, staffList, clients,
         editing={editingApt}
         defaultStartsAt={defaultStartsAt}
         defaultStaffId={defaultStaffId}
-        services={services}
         staffList={staffList}
         clients={clients}
         onSaved={() => router.refresh()}
