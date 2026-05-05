@@ -106,8 +106,11 @@ type ViewMode = 'schedule' | 'week' | 'month'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DAY_START = 7
-const DAY_END = 21
+// Working hours displayed on the calendar grid. Hours from DAY_START up to
+// (but not including) DAY_END are rendered as full slots; an extra closing
+// label is drawn at DAY_END so the grid has a clean lower boundary.
+const DAY_START = 8
+const DAY_END = 20
 const HOUR_HEIGHT = 64   // px per hour → 1px per minute at 64/60
 const SLOT_MIN = 15       // calendar slot granularity (also drag snap)
 const SNAP_MIN = SLOT_MIN
@@ -116,6 +119,16 @@ const HOURS = Array.from({ length: DAY_END - DAY_START }, (_, i) => DAY_START + 
 // Quarter-hour offsets (in hours) used to draw the lighter grid lines and to
 // mount slot click targets for :15/:30/:45.
 const QUARTERS: ReadonlyArray<number> = [0, 0.25, 0.5, 0.75]
+// Vertical breathing room above the first hour line and below the last so the
+// time labels never get clipped against the sticky header / column border.
+const TIMELINE_TOP_PAD = 12
+const TIMELINE_BOTTOM_PAD = 16
+const TIMELINE_HEIGHT = (DAY_END - DAY_START) * HOUR_HEIGHT + TIMELINE_TOP_PAD + TIMELINE_BOTTOM_PAD
+
+// 24h hour label, e.g. 8 → "08:00".
+function fmtHour(h: number): string {
+  return `${String(h).padStart(2, '0')}:00`
+}
 
 // Round a Date down to the nearest 15-minute mark.
 function snapToSlot(d: Date): Date {
@@ -143,7 +156,7 @@ function toDatetimeLocal(date: Date): string {
 
 function aptTopPx(iso: string): number {
   const d = parseISO(iso)
-  return Math.max(0, (getHours(d) + getMinutes(d) / 60 - DAY_START) * HOUR_HEIGHT)
+  return Math.max(0, TIMELINE_TOP_PAD + (getHours(d) + getMinutes(d) / 60 - DAY_START) * HOUR_HEIGHT)
 }
 
 function aptHeightPx(startsAt: string, endsAt: string): number {
@@ -177,22 +190,36 @@ function computeLayout(apts: AppointmentRow[]): LaidOut[] {
 function HourLines() {
   return (
     <>
-      {HOURS.map((h) => (
+      {/* Top boundary of the working-hours window */}
+      <div
+        className="absolute left-0 right-0 border-t border-border pointer-events-none"
+        style={{ top: TIMELINE_TOP_PAD }}
+      />
+      {HOURS.map((h, idx) => (
         <div key={`h-${h}`}>
-          <div
-            className="absolute left-0 right-0 border-t border-border/50 pointer-events-none"
-            style={{ top: (h - DAY_START) * HOUR_HEIGHT }}
-          />
+          {/* Skip the redundant 0-offset line for the first hour — the top
+              boundary above already covers it. */}
+          {idx > 0 && (
+            <div
+              className="absolute left-0 right-0 border-t border-border/50 pointer-events-none"
+              style={{ top: TIMELINE_TOP_PAD + (h - DAY_START) * HOUR_HEIGHT }}
+            />
+          )}
           {/* Lighter quarter-hour lines (skip the on-the-hour line — already drawn) */}
           {QUARTERS.slice(1).map((q) => (
             <div
               key={`q-${h}-${q}`}
               className="absolute left-0 right-0 border-t border-dashed border-border/25 pointer-events-none"
-              style={{ top: (h - DAY_START + q) * HOUR_HEIGHT }}
+              style={{ top: TIMELINE_TOP_PAD + (h - DAY_START + q) * HOUR_HEIGHT }}
             />
           ))}
         </div>
       ))}
+      {/* Bottom boundary at DAY_END */}
+      <div
+        className="absolute left-0 right-0 border-t border-border pointer-events-none"
+        style={{ top: TIMELINE_TOP_PAD + (DAY_END - DAY_START) * HOUR_HEIGHT }}
+      />
     </>
   )
 }
@@ -212,7 +239,7 @@ function CurrentTimeLine() {
   return (
     <div
       className="absolute left-0 right-0 z-20 pointer-events-none"
-      style={{ top: (hours - DAY_START) * HOUR_HEIGHT }}
+      style={{ top: TIMELINE_TOP_PAD + (hours - DAY_START) * HOUR_HEIGHT }}
     >
       <div className="flex items-center">
         <span className="h-2 w-2 rounded-full bg-red-500 shrink-0 -ml-1 shadow-sm" />
@@ -349,7 +376,7 @@ function StaffColumn({
       <div
         ref={setNodeRef}
         className={`relative border-l transition-colors ${isOver ? 'bg-primary/5' : ''}`}
-        style={{ height: (DAY_END - DAY_START) * HOUR_HEIGHT }}
+        style={{ height: TIMELINE_HEIGHT }}
       >
         <HourLines />
 
@@ -361,7 +388,7 @@ function StaffColumn({
               <div
                 key={`${h}-${minute}`}
                 className="absolute left-0 right-0 z-[1] group/slot flex items-center justify-center"
-                style={{ top: (h - DAY_START + q) * HOUR_HEIGHT, height: SLOT_HEIGHT }}
+                style={{ top: TIMELINE_TOP_PAD + (h - DAY_START + q) * HOUR_HEIGHT, height: SLOT_HEIGHT }}
                 onClick={() => onClickSlot(slotDate(h, minute))}
               >
                 <span className="pointer-events-none flex h-4 w-4 items-center justify-center rounded-full
@@ -496,32 +523,39 @@ function SchedulerView({
       onDragCancel={() => setActiveApt(null)}
     >
       <div className="overflow-y-auto overflow-x-auto" style={{ maxHeight: '68vh' }}>
-        <div className="flex" style={{ minWidth: `${56 + columns.length * 110}px` }}>
+        <div className="flex" style={{ minWidth: `${64 + columns.length * 110}px` }}>
 
           {/* Time label column */}
-          <div className="w-14 shrink-0 flex flex-col">
+          <div className="w-16 shrink-0 flex flex-col">
             {/* Spacer matching the sticky header height */}
             <div className="sticky top-0 z-20 h-10 bg-card border-b" />
             {/* Hour + quarter-hour labels */}
-            <div className="relative" style={{ height: (DAY_END - DAY_START) * HOUR_HEIGHT }}>
+            <div className="relative" style={{ height: TIMELINE_HEIGHT }}>
               {HOURS.flatMap((h) => [
                 <div
                   key={`h-${h}`}
-                  className="absolute right-2 text-[11px] text-muted-foreground tabular-nums select-none"
-                  style={{ top: (h - DAY_START) * HOUR_HEIGHT - 8 }}
+                  className="absolute right-2 text-[11px] font-semibold text-foreground tabular-nums select-none"
+                  style={{ top: TIMELINE_TOP_PAD + (h - DAY_START) * HOUR_HEIGHT - 7 }}
                 >
-                  {h === 12 ? '12pm' : h < 12 ? `${h}am` : `${h - 12}pm`}
+                  {fmtHour(h)}
                 </div>,
                 ...QUARTERS.slice(1).map((q) => (
                   <div
                     key={`q-${h}-${q}`}
-                    className="absolute right-2 text-[9px] text-muted-foreground/50 tabular-nums select-none"
-                    style={{ top: (h - DAY_START + q) * HOUR_HEIGHT - 6 }}
+                    className="absolute right-2 text-[9px] text-muted-foreground/60 tabular-nums select-none"
+                    style={{ top: TIMELINE_TOP_PAD + (h - DAY_START + q) * HOUR_HEIGHT - 5 }}
                   >
                     :{Math.round(q * 60).toString().padStart(2, '0')}
                   </div>
                 )),
               ])}
+              {/* Closing label at DAY_END so the grid has a clear "end of day". */}
+              <div
+                className="absolute right-2 text-[11px] font-semibold text-foreground tabular-nums select-none"
+                style={{ top: TIMELINE_TOP_PAD + (DAY_END - DAY_START) * HOUR_HEIGHT - 7 }}
+              >
+                {fmtHour(DAY_END)}
+              </div>
             </div>
           </div>
 
@@ -571,10 +605,14 @@ function WeekView({
   function handleColClick(day: Date, e: React.MouseEvent<HTMLDivElement>) {
     if ((e.target as HTMLElement).closest('[data-apt]')) return
     const rect = e.currentTarget.getBoundingClientRect()
-    // Snap click position to the nearest 15-minute slot.
-    const minutesFromDayStart = Math.floor((e.clientY - rect.top) / SLOT_HEIGHT) * SLOT_MIN
+    // Account for the top padding inside the grid; clicks above the first
+    // hour line (or below the last) are clamped to a valid working slot.
+    const yInGrid = e.clientY - rect.top - TIMELINE_TOP_PAD
+    if (yInGrid < 0) return
+    const minutesFromDayStart = Math.floor(yInGrid / SLOT_HEIGHT) * SLOT_MIN
     const totalMinutes = DAY_START * 60 + minutesFromDayStart
-    const hour = Math.min(Math.floor(totalMinutes / 60), DAY_END - 1)
+    if (totalMinutes >= DAY_END * 60) return
+    const hour = Math.floor(totalMinutes / 60)
     const minute = totalMinutes % 60
     const d = new Date(day); d.setHours(hour, minute, 0, 0)
     onClickSlot(d)
@@ -583,7 +621,7 @@ function WeekView({
   return (
     <div className="flex flex-col">
       <div className="flex border-b sticky top-0 bg-card z-20">
-        <div className="w-14 shrink-0" />
+        <div className="w-16 shrink-0" />
         {days.map((day) => (
           <div key={day.toISOString()}
             className={`flex-1 min-w-[72px] text-center py-2 select-none ${isToday(day) ? 'bg-primary/5' : ''}`}
@@ -596,19 +634,24 @@ function WeekView({
         ))}
       </div>
       <div className="flex overflow-y-auto overflow-x-auto" style={{ maxHeight: '62vh' }}>
-        <div className="w-14 shrink-0 relative" style={{ height: (DAY_END - DAY_START) * HOUR_HEIGHT }}>
+        <div className="w-16 shrink-0 relative" style={{ height: TIMELINE_HEIGHT }}>
           {HOURS.flatMap((h) => [
-            <div key={`h-${h}`} className="absolute right-2 text-[11px] text-muted-foreground tabular-nums select-none"
-              style={{ top: (h - DAY_START) * HOUR_HEIGHT - 8 }}>
-              {h === 12 ? '12pm' : h < 12 ? `${h}am` : `${h - 12}pm`}
+            <div key={`h-${h}`} className="absolute right-2 text-[11px] font-semibold text-foreground tabular-nums select-none"
+              style={{ top: TIMELINE_TOP_PAD + (h - DAY_START) * HOUR_HEIGHT - 7 }}>
+              {fmtHour(h)}
             </div>,
             ...QUARTERS.slice(1).map((q) => (
-              <div key={`q-${h}-${q}`} className="absolute right-2 text-[9px] text-muted-foreground/50 tabular-nums select-none"
-                style={{ top: (h - DAY_START + q) * HOUR_HEIGHT - 6 }}>
+              <div key={`q-${h}-${q}`} className="absolute right-2 text-[9px] text-muted-foreground/60 tabular-nums select-none"
+                style={{ top: TIMELINE_TOP_PAD + (h - DAY_START + q) * HOUR_HEIGHT - 5 }}>
                 :{Math.round(q * 60).toString().padStart(2, '0')}
               </div>
             )),
           ])}
+          {/* Closing label — keeps the day's end visible at the bottom edge. */}
+          <div className="absolute right-2 text-[11px] font-semibold text-foreground tabular-nums select-none"
+            style={{ top: TIMELINE_TOP_PAD + (DAY_END - DAY_START) * HOUR_HEIGHT - 7 }}>
+            {fmtHour(DAY_END)}
+          </div>
         </div>
         {days.map((day) => {
           const dayApts = appointments.filter((a) => isSameDay(parseISO(a.starts_at), day))
@@ -616,7 +659,7 @@ function WeekView({
           return (
             <div key={day.toISOString()}
               className={`flex-1 min-w-[72px] relative border-l cursor-pointer ${isToday(day) ? 'bg-primary/5' : ''}`}
-              style={{ height: (DAY_END - DAY_START) * HOUR_HEIGHT }}
+              style={{ height: TIMELINE_HEIGHT }}
               onClick={(e) => handleColClick(day, e)}
             >
               <HourLines />
@@ -784,80 +827,6 @@ function TodaySummary({
         New Appointment
       </Button>
     </div>
-  )
-}
-
-// ─── Appointment detail dialog ────────────────────────────────────────────────
-
-function AptDetail({
-  apt,
-  color,
-  onEdit,
-  onDelete,
-  onClose,
-}: {
-  apt: AppointmentRow
-  color: ServiceColor
-  onEdit: () => void
-  onDelete: () => void
-  onClose: () => void
-}) {
-  const cfg = STATUS_CFG[apt.status]
-  return (
-    <Dialog open onOpenChange={(v) => { if (!v) onClose() }}>
-      <DialogContent className="sm:max-w-sm">
-        <div
-          className="h-1 rounded-full"
-          style={{ backgroundColor: color.hex }}
-          aria-hidden="true"
-        />
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            {apt.client_name}
-            <span className={`ml-auto inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-              apt.status === 'confirmed' ? 'bg-emerald-50 text-emerald-700'
-              : apt.status === 'pending' ? 'bg-amber-50 text-amber-700'
-              : apt.status === 'completed' ? 'bg-blue-50 text-blue-700'
-              : apt.status === 'cancelled' ? 'bg-muted text-muted-foreground'
-              : 'bg-red-50 text-red-700'
-            }`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${
-                apt.status === 'confirmed' ? 'bg-emerald-500'
-                : apt.status === 'pending' ? 'bg-amber-400'
-                : apt.status === 'completed' ? 'bg-blue-400'
-                : apt.status === 'cancelled' ? 'bg-muted-foreground/40'
-                : 'bg-red-400'
-              }`} />
-              {cfg.label}
-            </span>
-          </DialogTitle>
-        </DialogHeader>
-        <div className="flex flex-col gap-2 text-sm">
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Clock className="h-3.5 w-3.5 shrink-0" />
-            {format(parseISO(apt.starts_at), 'EEEE, MMMM d · HH:mm')}
-            {' – '}
-            {format(parseISO(apt.ends_at), 'HH:mm')}
-          </div>
-          {apt.service && (
-            <p className="flex items-center gap-2">
-              <span
-                className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-foreground/10"
-                style={{ backgroundColor: color.hex }}
-              />
-              <span><span className="text-muted-foreground">Service:</span> {apt.service.name} ({apt.service.duration_minutes} min)</span>
-            </p>
-          )}
-          {apt.staff  && <p><span className="text-muted-foreground">Staff:</span> {apt.staff.name}</p>}
-          {apt.client_phone && <p><span className="text-muted-foreground">Phone:</span> {apt.client_phone}</p>}
-          {apt.notes  && <p><span className="text-muted-foreground">Notes:</span> {apt.notes}</p>}
-        </div>
-        <DialogFooter className="gap-2 sm:gap-0">
-          <Button variant="destructive" size="sm" onClick={onDelete}>Delete</Button>
-          <Button size="sm" onClick={onEdit}>Edit</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }
 
@@ -1234,6 +1203,7 @@ function AptFormDialog({
   staffList,
   clients,
   onSaved,
+  onDelete,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -1244,6 +1214,7 @@ function AptFormDialog({
   staffList: Staff[]
   clients: ClientSummary[]
   onSaved: () => void
+  onDelete?: (apt: AppointmentRow) => void
 }) {
   const [formError, setFormError] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
@@ -1528,11 +1499,25 @@ function AptFormDialog({
           </div>
         </form>
 
-        <DialogFooter>
-          <Button variant="outline" type="button" disabled={isPending} onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button type="submit" form="apt-form" disabled={isPending}>
-            {isPending ? 'Saving…' : editing ? 'Save Changes' : 'Book Appointment'}
-          </Button>
+        <DialogFooter className="sm:justify-between">
+          <div>
+            {editing && onDelete && (
+              <Button
+                variant="destructive"
+                type="button"
+                disabled={isPending}
+                onClick={() => onDelete(editing)}
+              >
+                Delete
+              </Button>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" type="button" disabled={isPending} onClick={() => onOpenChange(false)}>Cancel</Button>
+            <Button type="submit" form="apt-form" disabled={isPending}>
+              {isPending ? 'Saving…' : editing ? 'Save Changes' : 'Book Appointment'}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -1729,11 +1714,10 @@ export function AppointmentsClient({ appointments, services, staffList, clients,
   const [view, setView] = useState<ViewMode>('schedule')
   const [currentDate, setCurrentDate] = useState(() => new Date())
   const [formOpen, setFormOpen] = useState(false)
-  const [detailApt, setDetailApt] = useState<AppointmentRow | null>(null)
   const [editingApt, setEditingApt] = useState<AppointmentRow | null>(null)
   const [defaultStartsAt, setDefaultStartsAt] = useState('')
   const [defaultStaffId, setDefaultStaffId] = useState<string | null>(null)
-  const [isPending, startTransition] = useTransition()
+  const [, startTransition] = useTransition()
 
   // Stable color resolver: pre-computes from the active service list, then
   // falls back to a deterministic hash on the service id for any appointment
@@ -1763,7 +1747,6 @@ export function AppointmentsClient({ appointments, services, staffList, clients,
   }
 
   function openEdit(apt: AppointmentRow) {
-    setDetailApt(null)
     setEditingApt(apt)
     setDefaultStartsAt('')
     setDefaultStaffId(null)
@@ -1772,7 +1755,7 @@ export function AppointmentsClient({ appointments, services, staffList, clients,
 
   function handleDelete(apt: AppointmentRow) {
     if (!confirm(`Delete appointment for "${apt.client_name}"?`)) return
-    setDetailApt(null)
+    setFormOpen(false)
     startTransition(async () => {
       const result = await deleteAppointment(apt.id)
       if (result.error) { toast.error(result.error); return }
@@ -1841,7 +1824,7 @@ export function AppointmentsClient({ appointments, services, staffList, clients,
             appointments={appointments}
             staffList={staffList}
             colorFor={colorFor}
-            onClickApt={(apt) => setDetailApt(apt)}
+            onClickApt={openEdit}
             onClickSlot={({ time, staffId }) => openCreate({ time, staffId })}
           />
         )}
@@ -1850,7 +1833,7 @@ export function AppointmentsClient({ appointments, services, staffList, clients,
             date={currentDate}
             appointments={appointments}
             colorFor={colorFor}
-            onClickApt={(apt) => setDetailApt(apt)}
+            onClickApt={openEdit}
             onClickSlot={(d) => openCreate({ time: d })}
           />
         )}
@@ -1859,21 +1842,11 @@ export function AppointmentsClient({ appointments, services, staffList, clients,
             date={currentDate}
             appointments={appointments}
             colorFor={colorFor}
-            onClickApt={(apt) => setDetailApt(apt)}
+            onClickApt={openEdit}
             onClickDay={(d) => { setCurrentDate(d); setView('schedule') }}
           />
         )}
       </div>
-
-      {detailApt && (
-        <AptDetail
-          apt={detailApt}
-          color={colorFor(detailApt.service_id)}
-          onEdit={() => openEdit(detailApt)}
-          onDelete={() => handleDelete(detailApt)}
-          onClose={() => setDetailApt(null)}
-        />
-      )}
 
       <AptFormDialog
         open={formOpen}
@@ -1885,6 +1858,7 @@ export function AppointmentsClient({ appointments, services, staffList, clients,
         staffList={staffList}
         clients={clients}
         onSaved={() => router.refresh()}
+        onDelete={handleDelete}
       />
     </div>
   )
