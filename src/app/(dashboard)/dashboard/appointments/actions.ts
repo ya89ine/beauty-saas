@@ -287,7 +287,6 @@ export async function createAppointment(formData: FormData): Promise<Result> {
       status: newStatus,
       notes: (formData.get('notes') as string) || null,
       package_id: packageId,
-      price: serviceFull?.price ?? null,
     })
 
     if (error) {
